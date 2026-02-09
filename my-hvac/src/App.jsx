@@ -25,7 +25,7 @@ export default function UltimateIECDxDemo() {
         qLoad: 50000, // 机房热负载 (W) - 默认50kW
     });
 
-    const [mode, setMode] = useState('dry');
+    const [mode, setMode] = useState('auto');
 
     // 系统规格参数（可通过高级设置编辑）
     const [systemSpecs, setSystemSpecs] = useState({
