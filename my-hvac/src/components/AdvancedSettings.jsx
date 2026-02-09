@@ -229,7 +229,7 @@ const AdvancedSettings = ({ specs, onSpecsChange }) => {
                             onClick={() => {
                                 if (confirm('确定要重置所有参数到默认值吗？')) {
                                     // 这里需要传入默认值
-                                    console.log('重置参数');
+                                    // 重置参数已确认
                                 }
                             }}
                             className="w-full py-2 px-4 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded text-xs transition-colors"

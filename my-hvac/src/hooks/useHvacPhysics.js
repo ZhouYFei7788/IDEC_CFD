@@ -22,7 +22,7 @@ const SYSTEM_SPECS = {
     DX: {
         RATED_CAPACITY: 60000,
         RATED_COP: 3.2,
-        MIN_FREQ: 30,
+        MIN_FREQ: 20,  // 动态降低到20Hz以便柔性调节
         MAX_FREQ: 90
     },
     THERMAL: {
@@ -71,9 +71,8 @@ function safeNumber(value, decimals = 1, fallback = 0) {
 /**
  * 主Hook: HVAC系统物理仿真
  */
-export const useHvacPhysics = (params, mode, systemSpecs = null, faultEffects = null) => {
+export const useHvacPhysics = (params, mode, systemSpecs = null) => {
     const SPECS = systemSpecs || SYSTEM_SPECS;
-
     // 解构参数
     const { oaTemp = 35, oaRh = 45, saSet = 25, qLoad = 50000, fanSpeed = 80 } = params;
 
@@ -82,13 +81,24 @@ export const useHvacPhysics = (params, mode, systemSpecs = null, faultEffects = 
         raTemp: saSet + 12,
         saTemp: saSet,
         coreOut: saSet + 5,
+        roomTemp: saSet + 2,       // 冷通道温度（平滑）
         compHz: 0,
         dxOn: false,
         eevOpening: 240,
         lastTime: Date.now(),
         dxLastChangeTime: Date.now(),
         cfcIntegral: 0,
-        oaNoise: 0 // 室外温度扰动
+        oaNoise: 0, // 室外温度扰动
+        // CFC变化率追踪
+        prevCfc: 35,                // 上一次CFC值
+        cfcRate: 0,                 // CFC变化率 (%/秒)
+        fanSpeedTarget: 50,         // 目标风速（平滑过渡用）
+        // 新增：平滑与计时状态
+        cfcAvg: 35,                 // CFC低通滤波值
+        overcoolSince: null,        // 过冷开始时间
+        minOnTimer: 0,              // 最小开机计时
+        minOffTimer: 0,             // 最小关机计时
+        dxLockReason: null          // 锁定原因: 'min_on' | 'min_off' | 'overcool' | null
     });
 
     const pidRef = useRef(new SimplePID(5, 0.1, 0.5));
@@ -159,65 +169,82 @@ export const useHvacPhysics = (params, mode, systemSpecs = null, faultEffects = 
                 // === 智能控制系统 ===
 
                 // 1. 制冷需求计算 (CFC)
-                // 目标：维持回风与送风温差在 13°C 左右
-                const targetDt = 13;
+                // 目标：维持回风与送风温差
+                // 参数化目标温差：适配低送风设定
+                const targetDt = Math.max(10, saSet * 0.4);
                 const raTarget = saSet + targetDt;
 
                 // 计算瞬时误差
                 const saError = stateRef.current.saTemp - saSet;
 
-                // 积分修正 (优化): 全局启用积分，但限制积分速度
-                // 只有当偏差较小时积分生效快，偏差大时主要靠比例控制
+                // 积分修正 (优化): 增大积分限幅到±10避免抖动
                 const integralRate = Math.abs(raTemp - raTarget) < 3 ? 0.1 : 0.01;
                 stateRef.current.cfcIntegral += saError * safedt * integralRate;
-                stateRef.current.cfcIntegral = Math.max(-5, Math.min(5, stateRef.current.cfcIntegral));
+                stateRef.current.cfcIntegral = Math.max(-10, Math.min(10, stateRef.current.cfcIntegral));
 
-                // 计算总误差 (权重调整: 提高送风温度权重要求)
-                // 原: 0.8 RA / 0.2 SA -> 现: 0.4 RA / 0.6 SA
-                // 目的: 当用户设定极低送风温度时，即使回风温度不高，也要强制制冷
-                const tempError = 0.4 * (raTemp - raTarget) + 0.6 * saError + stateRef.current.cfcIntegral;
+                // 计算总误差 (权重调整: RA 70% / SA 30%)
+                const tempError = 0.7 * (raTemp - raTarget) + 0.3 * saError + stateRef.current.cfcIntegral;
 
-                // 将误差映射到 0-100% 的 CFC
-                let cfc = Math.max(0, Math.min(100, (tempError + 5) * 10));
+                // 将误差映射到 0-100% 的 CFC (基础值40, 增益6)
+                let cfc = Math.max(0, Math.min(100, 40 + tempError * 6));
+
+                // CFC低通滤波 (~5-7s 时间常数)
+                const CFC_ALPHA = 0.15;
+                stateRef.current.cfcAvg = stateRef.current.cfcAvg + CFC_ALPHA * (cfc - stateRef.current.cfcAvg);
+                const cfcSmooth = stateRef.current.cfcAvg;
+
+                // CFC底线保护：回风高于设定8°C时至少20%
+                if (raTemp > saSet + 8) cfc = Math.max(cfc, 20);
+
+                // === CFC变化率计算 ===
+                const cfcDelta = cfc - stateRef.current.prevCfc;
+                const cfcRate = cfcDelta / safedt;  // %/秒
+                stateRef.current.cfcRate = cfcRate;
+                stateRef.current.prevCfc = cfc;
 
                 // 2. 智能送风温度调节
                 // 始终精确跟踪用户设定值，移除不稳定的动态设定点逻辑
                 let saSet_actual = saSet;
 
-                // 3. 动态风速调节 (分程控制 + 温度补偿 + 平滑过渡)
-                // 基础风速：由CFC驱动
-                let fanSpeed_target = 1 + cfc * 1.19;
+                // 3. 风速控制 —— 以热通道为一号目标
+                // 基础风速由热通道误差驱动：回风高于 (saSet+6) 每升高1°C，风速提 5%
+                const hotError = raTemp - (saSet + 6);
+                let fanSpeedTarget = 50 + hotError * 5;
 
-                // === 送风温度控制逻辑（降低增益，避免过度调节）===
-                // saError > 0: 送风温度高于设定值，需要增加制冷
-                // saError < 0: 送风温度低于设定值，需要减少制冷
+                // CFC 仅做微调，避免“需求低→风机骤降”
+                fanSpeedTarget += (cfcSmooth - 60) * 0.2; // ±8% 以内
 
-                if (saError > 2) {
-                    // 送风温度严重过高：增加风速
-                    const tempBoost = saError * 6;  // 从15降到6
-                    fanSpeed_target += tempBoost;
-                } else if (saError > 0) {
-                    // 送风温度略高：适度增加风速
-                    const tempBoost = saError * 4;  // 从8降到4
-                    fanSpeed_target += tempBoost;
-                } else if (saError < -2) {
-                    // 送风温度严重过低：降低风速
-                    const tempReduction = Math.abs(saError) * 6;  // 从15降到6
-                    fanSpeed_target = Math.max(fanSpeed_target - tempReduction, 20);
-                } else if (saError < 0) {
-                    // 送风温度略低：适度降低风速
-                    const tempReduction = Math.abs(saError) * 4;  // 从8降到4
-                    fanSpeed_target = Math.max(fanSpeed_target - tempReduction, 30);
+                // 送风温度补偿：过冷→降速，过热→升速
+                if (saError < -1) {
+                    fanSpeedTarget -= Math.abs(saError) * 4;
+                } else if (saError > 1.5) {
+                    fanSpeedTarget += saError * 5;
                 }
 
-                fanSpeed_target = Math.max(20, Math.min(120, fanSpeed_target));
+                // 最低风速提升，防止压缩机开启时风量过小导致送风暴冷
+                const minFan = hotError > 2 ? 55 : 45;
+                fanSpeedTarget = Math.max(minFan, Math.min(90, fanSpeedTarget));
 
-                // 平滑过渡：使用一阶滤波，避免风速突变
-                // alpha = 0.3: 快速响应但不会太激进
-                const fanAlpha = 0.3;
-                const prevFanSpeed = stateRef.current.prevFanSpeed || fanSpeed_target;
-                let fanSpeed_actual = prevFanSpeed * (1 - fanAlpha) + fanSpeed_target * fanAlpha;
-                stateRef.current.prevFanSpeed = fanSpeed_actual;
+                // === 风机PID控制：平滑过渡，限制上涨速度 ===
+                const prevFanSpeed = stateRef.current.fanSpeedTarget;
+                const fanDelta = fanSpeedTarget - prevFanSpeed;
+
+                // 限制风速变化率
+                let maxRiseRate = 8;   // 最大上涨速率 8%/秒
+                let maxFallRate = 15;  // 最大下降速率 15%/秒
+
+                // 应用限速
+                let limitedDelta;
+                if (fanDelta > 0) {
+                    limitedDelta = Math.min(fanDelta, maxRiseRate * safedt);  // 限制上涨
+                } else {
+                    limitedDelta = Math.max(fanDelta, -maxFallRate * safedt); // 限制下降
+                }
+
+                let fanSpeed_actual = prevFanSpeed + limitedDelta;
+                stateRef.current.fanSpeedTarget = fanSpeed_actual;
+
+                fanSpeed_actual = Math.max(20, Math.min(100, fanSpeed_actual));  // 最低20%
 
                 // === 模式判定 & 设备控制 ===
                 let sprayOn = false;
@@ -244,7 +271,7 @@ export const useHvacPhysics = (params, mode, systemSpecs = null, faultEffects = 
                     // 紧急保护: 如果回风温度过高 (且送风没有过冷)，强制开启
                     // 只有当送风偏差 > -1 (即送风没有比设定低1度以上) 时才允许因为回风高而强启
                     if (raTemp > saSet + 10 && saError > -1) dxWanted = true;
-                    if (saError > 2) dxWanted = true; // 送风偏差>2度强制开启DX（从3度降到2度）
+                    if (saError > 3) dxWanted = true; // 新增: 送风偏差>3度强制开启DX
 
                 } else if (mode === 'dx') {
                     sprayOn = false;
@@ -253,72 +280,93 @@ export const useHvacPhysics = (params, mode, systemSpecs = null, faultEffects = 
                 } else if (mode === 'auto') {
                     // === 自动模式：智能控制所有设备 ===
 
-                    // 1. 智能喷淋控制
+                    // 1. 智能喷淋控制：根据室外温度和湿球优势决定
                     const oaTempThreshold = 25;
-                    const wbAdvantage = effectiveOaTemp - wb;
+                    const wbAdvantage = effectiveOaTemp - wb;  // 湿球优势（越大越适合喷淋）
 
                     if (effectiveOaTemp > oaTempThreshold && wbAdvantage > 5) {
-                        sprayOn = true; // 高温且湿球优势明显，开启喷淋
+                        sprayOn = true;  // 高温且湿球优势明显，开启喷淋
                     } else {
-                        sprayOn = false; // 低温或湿球优势不明显，干模式
+                        sprayOn = false;  // 低温或湿球优势不明显，干模式
                     }
 
-                    // 2. 智能DX控制
+                    // 2. 智能DX控制：基于CFC和温度偏差
                     if (stateRef.current.dxOn) {
                         // DX已开启，检查是否可以关闭
                         if (cfc < 25 && saError < 0) {
-                            dxWanted = false;
+                            dxWanted = false;  // 制冷需求低且送风已达标
                         } else {
                             dxWanted = true;
                         }
                     } else {
                         // DX关闭，检查是否需要开启
-                        if (cfc > 40 || saError > 2) {  // 从3度降到2度
-                            dxWanted = true;
+                        if (cfc > 40 || saError > 2) {
+                            dxWanted = true;  // CFC>40%或送风偏差>2度
                         } else {
                             dxWanted = false;
                         }
                     }
 
                     // 紧急保护
-                    if (raTemp > saSet + 12) dxWanted = true;
-                    if (saError < -3) dxWanted = false;
+                    if (raTemp > saSet + 12) dxWanted = true;  // 回风过高
+                    if (saError < -3) dxWanted = false;  // 送风过冷，停DX
                 }
 
-                // === 应用设备故障影响 ===
-                if (faultEffects) {
-                    // 水泵故障：禁用喷淋
-                    if (faultEffects.sprayDisabled) {
-                        sprayOn = false;
-                    }
+                // === 压缩机启停控制 (cfcSmooth驱动) ===
+                const MIN_ON = 90;   // 最小开机时间 (s)
+                const MIN_OFF = 45;  // 最小关机时间 (s) — 允许更快重启避免热通道过热
+                const timeSinceChange = (now - stateRef.current.dxLastChangeTime) / 1000;
 
-                    // 压缩机故障：禁用DX
-                    if (faultEffects.compressorDisabled) {
+                // 更新计时器
+                if (stateRef.current.dxOn) {
+                    stateRef.current.minOnTimer = timeSinceChange;
+                } else {
+                    stateRef.current.minOffTimer = timeSinceChange;
+                }
+
+                let dxLockReason = null;
+
+                // 滞回控制 + 最小开/关时间
+                if (stateRef.current.dxOn) {
+                    // DX已开启，检查是否可以关闭
+                    if (cfcSmooth < 30 && saError < -0.5 && stateRef.current.minOnTimer > MIN_ON) {
+                        dxWanted = false;
+                    } else {
+                        dxWanted = true;
+                        if (stateRef.current.minOnTimer < MIN_ON) dxLockReason = 'min_on';
+                    }
+                } else {
+                    // DX关闭，检查是否需要开启
+                    const hotBypass = raTemp > saSet + 12;           // 热通道极高，直接绕过最小关机
+                    const needCool = (cfcSmooth > 45 || raTemp > saSet + 8);
+
+                    if (needCool) {
+                        if (stateRef.current.minOffTimer > MIN_OFF || hotBypass) {
+                            dxWanted = true;
+                        } else {
+                            dxWanted = false;
+                            dxLockReason = 'min_off';
+                        }
+                    } else {
                         dxWanted = false;
                     }
                 }
 
-                // 最小启停时间保护
-                if (stateRef.current.dxOn) {
-                    if (!dxWanted && (now - stateRef.current.dxLastChangeTime) / 1000 < 180) {
-                        dxWanted = true;
+                // 过冷保护：只做软降频，不强制关机
+                const currentSaTemp = stateRef.current.saTemp;
+                stateRef.current.overCoolActive = false;
+                if (currentSaTemp < saSet - 1.0) {
+                    stateRef.current.overcoolSince = stateRef.current.overcoolSince || now;
+                    const ocDuration = (now - stateRef.current.overcoolSince) / 1000;
+                    if (ocDuration > 5) {
+                        stateRef.current.overCoolActive = true;
+                        dxLockReason = dxLockReason || 'overcool';
                     }
                 } else {
-                    const offTime = (now - stateRef.current.dxLastChangeTime) / 1000;
-                    if (dxWanted && offTime < 300) {
-                        // 紧急情况：CFC>80% 允许提前启动
-                        if (cfc > 80) {
-                            dxWanted = true;
-                        } else {
-                            dxWanted = false;
-                        }
-                    }
+                    stateRef.current.overcoolSince = null;
                 }
 
-                // 送风温度过低保护：避免过冷
-                if (saError < -3) {  // 从-5改为-3，更快关闭DX
-                    dxWanted = false;
-                }
+                stateRef.current.dxLockReason = dxLockReason;
 
                 if (dxWanted !== stateRef.current.dxOn) {
                     stateRef.current.dxOn = dxWanted;
@@ -327,86 +375,54 @@ export const useHvacPhysics = (params, mode, systemSpecs = null, faultEffects = 
                 const dxOn = stateRef.current.dxOn;
 
                 // === 风量计算 ===
-                let flow_m3s = (MAX_AIRFLOW * (fanSpeed_actual / 100)) / 3600;
-
-                // 应用风机故障影响
-                if (faultEffects && faultEffects.fanCapacityPenalty > 0) {
-                    flow_m3s = flow_m3s * (1 - faultEffects.fanCapacityPenalty);
-                }
-
+                const flow_m3s = (MAX_AIRFLOW * (fanSpeed_actual / 100)) / 3600;
                 const m_air = flow_m3s * rho;
-                const airflow_m3h = flow_m3s * 3600;
+                const airflow_m3h = MAX_AIRFLOW * (fanSpeed_actual / 100);
 
                 // === IEC换热计算 ===
                 const baseEff = sprayOn ? wetEff : dryEff;
                 const degr = sprayOn ? wetDegr : dryDegr;
                 const ratio = fanSpeed_actual / 100;
-                let efficiency = baseEff - ratio * degr;
-
-                // 应用IEC芯体故障影响
-                if (faultEffects && faultEffects.iecEfficiencyPenalty > 0) {
-                    efficiency = efficiency * (1 - faultEffects.iecEfficiencyPenalty);
-                }
+                const efficiency = baseEff - ratio * degr;
 
                 const T_sink = sprayOn ? wb : effectiveOaTemp; // 使用扰动后的温度
                 const coreOut_target = raTemp - efficiency * (raTemp - T_sink);
 
-                // 热惯性：减小时间常数以加快响应
-                const tau_thermal = 2.0; // 从5.0降到2.0，加快响应
+                const tau_thermal = 5.0;
                 const alpha = Math.min(safedt / tau_thermal, 1);
                 let coreOut = stateRef.current.coreOut * (1 - alpha) + coreOut_target * alpha;
                 coreOut = Math.max(10, coreOut);
                 stateRef.current.coreOut = coreOut;
 
-                // === DX制冷计算 (分程控制) ===
+                // === DX制冷计算 (去掉平台锁定，使用频率爬坡) ===
                 let compHz = stateRef.current.compHz;
                 let saTemp_target = coreOut;
                 let Q_dx_actual = 0;
                 const actualSaTemp = stateRef.current.saTemp;
 
                 if (dxOn) {
-                    // 策略：CFC直接驱动压缩机频率
-                    // CFC 40-100% -> 频率 30-90Hz (线性映射)
-                    // 确保每一级CFC都有对应的频率输出
+                    // 频率目标与爬坡限速：热通道优先，其次需求，过冷时进一步削弱
+                    const hotBoost = Math.max(0, raTemp - (saSet + 6)) * 2.0;  // 每高1°C加2Hz
+                    const cfcBoost = (cfcSmooth - 50) * 0.6;                    // 需求微调
+                    const overCoolScale = saError < 0 ? Math.max(0, 1 - Math.abs(saError) / 3) : 1; // 低于设定3°C线性降到0
+                    let targetHz = (DX_MIN + hotBoost + cfcBoost) * overCoolScale;
 
-                    let targetHz = 30;
-                    if (cfc > 40) {
-                        // (CFC-40) / 60 * 60 + 30
-                        targetHz = 30 + (cfc - 40) * 1.0;
-                    }
+                    // 过冷激活时进一步放宽下限到10Hz，避免暴冷但不断供
+                    const dxMinSoft = stateRef.current.overCoolActive ? 10 : DX_MIN;
+                    targetHz = Math.max(dxMinSoft, Math.min(DX_MAX, targetHz));
 
-                    // 限制范围
-                    targetHz = Math.max(DX_MIN, Math.min(DX_MAX, targetHz));
+                    // 爬坡限速: 约2 Hz/s
+                    const MAX_HZ_STEP = 2.0 * safedt;
+                    compHz = compHz + Math.max(-MAX_HZ_STEP, Math.min(MAX_HZ_STEP, targetHz - compHz));
 
-                    // 平滑过渡：加快变频器响应
-                    const hzAlpha = 0.2; // 从0.1提高到0.2
-                    compHz = compHz * (1 - hzAlpha) + targetHz * hzAlpha;
-
-                    if (stateRef.current.dxOn) {
-                        let dxCapacity = DX_CAP * (compHz / DX_MAX);
-
-                        // 应用DX相关故障影响
-                        if (faultEffects) {
-                            // 膨胀阀故障：效率降低
-                            if (faultEffects.dxEfficiencyPenalty > 0) {
-                                dxCapacity = dxCapacity * (1 - faultEffects.dxEfficiencyPenalty);
-                            }
-
-                            // 蒸发器故障：容量降低
-                            if (faultEffects.dxCapacityPenalty > 0) {
-                                dxCapacity = dxCapacity * (1 - faultEffects.dxCapacityPenalty);
-                            }
-
-                            // 冷凝器故障：COP降低（通过功耗增加体现）
-                            // 这里简化为容量降低
-                            if (faultEffects.dxCOPPenalty > 0) {
-                                dxCapacity = dxCapacity * (1 - faultEffects.dxCOPPenalty * 0.5);
-                            }
-                        }
-
-                        Q_dx_actual = dxCapacity;
-                        saTemp_target = coreOut - Q_dx_actual / (m_air * cp);
-                    }
+                    Q_dx_actual = DX_CAP * (compHz / DX_MAX);
+                    // 限制DX降温幅度，防止低风量时温度骤降
+                    const baseMaxDx = fanSpeed_actual < 50 ? 9 : 12;
+                    let dxDeltaT = Q_dx_actual / (m_air * cp);
+                    // 送风已低于设定时再削弱 40%，避免暴冷
+                    if (saError < -0.5) dxDeltaT *= 0.6;
+                    dxDeltaT = Math.min(dxDeltaT, baseMaxDx);
+                    saTemp_target = coreOut - dxDeltaT;
                 } else {
                     compHz = 0;
                     saTemp_target = coreOut;
@@ -415,7 +431,7 @@ export const useHvacPhysics = (params, mode, systemSpecs = null, faultEffects = 
 
                 stateRef.current.compHz = compHz;
 
-                // 送风温度热惯性：加快响应
+                // 送风温度热惯性
                 let saTemp = stateRef.current.saTemp * (1 - alpha) + saTemp_target * alpha;
                 saTemp = Math.max(10, saTemp);
                 stateRef.current.saTemp = saTemp;
@@ -427,8 +443,14 @@ export const useHvacPhysics = (params, mode, systemSpecs = null, faultEffects = 
                 const newRaTemp = raTemp + dT_dt * safedt;
                 stateRef.current.raTemp = Math.max(15, newRaTemp);
 
+                // === 冷通道温度（平滑到送风+2°C，避免瞬时剧烈波动）===
+                const roomTempTarget = saTemp + 2;
+                const tau_room = 6.0; // 冷通道等效时间常数（秒）
+                const alphaRoom = Math.min(safedt / tau_room, 1);
+                const roomTemp = stateRef.current.roomTemp * (1 - alphaRoom) + roomTempTarget * alphaRoom;
+                stateRef.current.roomTemp = roomTemp;
+
                 // === 其他温度 ===
-                const roomTemp = saTemp + 2;  // 冷通道比送风高2度
                 const deltaT_primary = raTemp - coreOut;
                 const eaTemp = Math.max(effectiveOaTemp, effectiveOaTemp + deltaT_primary); // 使用扰动后的温度
 
@@ -442,39 +464,11 @@ export const useHvacPhysics = (params, mode, systemSpecs = null, faultEffects = 
                 const capacity_kw = Q_total / 1000;
 
                 // 功率计算 (风机+压缩机) 和 COP
-                // === 功率计算 ===
-                // EC风机：阶梯加载，转速越小越省电，超载非常耗电
-                let fanPowerRatio = fanSpeed_actual / 100;
-                let fanPower_kw;
-                if (fanPowerRatio <= 0.5) {
-                    // 低速运行(0-50%)：立方关系，非常省电
-                    fanPower_kw = Math.pow(fanPowerRatio, 3) * FAN_RATED_POWER;
-                } else if (fanPowerRatio <= 0.8) {
-                    // 中速运行(50-80%)：立方关系
-                    fanPower_kw = Math.pow(fanPowerRatio, 3) * FAN_RATED_POWER;
-                } else if (fanPowerRatio <= 1.0) {
-                    // 高速运行(80-100%)：功率快速上升
-                    fanPower_kw = Math.pow(fanPowerRatio, 3) * FAN_RATED_POWER * 1.1;
-                } else if (fanPowerRatio <= 1.1) {
-                    // 轻微超载(100-110%)：功率显著上升
-                    fanPower_kw = FAN_RATED_POWER * (1.1 + (fanPowerRatio - 1.0) * 5);
-                } else {
-                    // 严重超载(110%+)：功率急剧上升
-                    // 120%时约为额定的2.5倍 (1.1 + 0.2*7 + 0.04*10 = 2.9)
-                    const overload = fanPowerRatio - 1.0;
-                    fanPower_kw = FAN_RATED_POWER * (1.1 + overload * 7 + Math.pow(overload, 2) * 10);
-                }
-
-                // 压缩机功耗：制冷量/COP + 损耗（电机损耗、变频器损耗等）
+                const fanPower_kw = Math.pow(fanSpeed_actual / 100, 3) * FAN_RATED_POWER;
                 let compPower_kw = 0;
                 if (dxOn && compHz > 0) {
                     const COP_actual = DX_COP * (0.9 + 0.1 * (compHz / DX_MAX));
-                    // 基础制冷功耗
-                    const basePower_kw = (Q_dx_actual / COP_actual) / 1000;
-                    // 损耗系数：低频损耗大（变频器效率低），高频损耗也大（电机发热）
-                    const freqRatio = compHz / DX_MAX;
-                    const lossCoeff = 1.15 + 0.1 * Math.abs(freqRatio - 0.6); // 60%频率时效率最高
-                    compPower_kw = basePower_kw * lossCoeff;
+                    compPower_kw = Q_dx_actual / (COP_actual * 1000);
                 }
                 const power_kw = fanPower_kw + compPower_kw;
                 const cop = power_kw > 0 ? (capacity_kw / power_kw) : 0;
@@ -523,10 +517,10 @@ export const useHvacPhysics = (params, mode, systemSpecs = null, faultEffects = 
                     console.groupEnd();
 
                     console.groupCollapsed('2. 控制信号 (Control Signals)');
-                    console.log(`制冷需求(CFC): ${cfc.toFixed(1)}% (积分项: ${stateRef.current.cfcIntegral.toFixed(2)})`);
-                    console.log(`风机转速: ${fanSpeed_actual.toFixed(1)}% (流量: ${airflow_m3h.toFixed(0)} m³/h)`);
+                    console.log(`制冷需求(CFC): ${cfc.toFixed(1)}% (滑动平均: ${cfcAvg.toFixed(1)}%, 积分项: ${stateRef.current.cfcIntegral.toFixed(2)})`);
+                    console.log(`风机转速: ${fanSpeed_actual.toFixed(1)}% (目标: ${fanSpeedTarget.toFixed(1)}%, 流量: ${airflow_m3h.toFixed(0)} m³/h)`);
                     console.log(`喷淋状态: ${sprayOn ? '开启' : '关闭'}`);
-                    console.log(`压缩机状态: ${dxOn ? '开启' : '关闭'} (请求: ${dxWanted ? '是' : '否'})`);
+                    console.log(`压缩机状态: ${dxOn ? '开启' : '关闭'} (请求: ${dxWanted ? '是' : '否'}, 锁定: ${dxLockReason || '无'})`);
                     console.log(`压缩机频率: ${compHz.toFixed(1)} Hz`);
                     console.log(`电子膨胀阀(EEV): ${eevOpening.toFixed(0)} step`);
                     console.groupEnd();
@@ -581,6 +575,12 @@ export const useHvacPhysics = (params, mode, systemSpecs = null, faultEffects = 
                     superheat: safeNumber(actualSaTemp - evapTemp, 1),
                     subcool: safeNumber(condTemp - (effectiveOaTemp + 15), 1), // 使用扰动后的温度
                     compPower: safeNumber(compPower_kw * 1000, 0),
+                    // 新增调试字段
+                    dxWanted,
+                    dxLockReason,
+                    cfcSmooth: safeNumber(cfcSmooth, 1),
+                    fanSpeedTarget: safeNumber(fanSpeedTarget, 0),
+                    overcool: stateRef.current.overcoolSince ? 'active' : '',
                     error: null
                 });
 

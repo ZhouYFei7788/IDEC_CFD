@@ -1,6 +1,6 @@
-# 🌡️ HVAC 模拟器 - 数据中心空调系统仿真平台
+# 🌡️ 间接蒸发冷仿真计算平台
 
-一个高度真实的数据中心 HVAC（暖通空调）系统物理仿真平台，支持间接蒸发冷却（IEC）和直膨制冷（DX）系统的实时模拟与可视化。
+一个高度真实的数据中心间接蒸发冷却（IEC）系统物理仿真平台，支持干模式、湿模式、混合模式和直膨制冷（DX）系统的实时模拟与可视化。
 
 ![HVAC Simulator](https://img.shields.io/badge/React-19.2.0-blue) ![Vite](https://img.shields.io/badge/Vite-7.2.4-646CFF) ![License](https://img.shields.io/badge/license-MIT-green)
 

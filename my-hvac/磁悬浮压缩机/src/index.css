@@ -1,0 +1,119 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    * {
+        @apply border-slate-700;
+    }
+
+    body {
+        @apply bg-slate-950 text-slate-100;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+
+    html {
+        scroll-behavior: smooth;
+    }
+}
+
+@layer components {
+    .tech-card {
+        @apply bg-gradient-to-br from-slate-900/90 to-slate-800/90 backdrop-blur-xl border border-slate-700/50 rounded-2xl p-6 transition-all duration-300 hover:border-magnetic-500/50 hover:shadow-xl hover:shadow-magnetic-500/10;
+    }
+
+    .data-display {
+        @apply font-mono text-2xl font-bold bg-gradient-to-r from-magnetic-400 to-techno-400 bg-clip-text text-transparent;
+    }
+
+    .section-title {
+        @apply text-4xl md:text-5xl font-bold bg-gradient-to-r from-slate-100 via-magnetic-300 to-techno-300 bg-clip-text text-transparent mb-8;
+    }
+
+    .pulse-ring {
+        @apply absolute rounded-full bg-magnetic-500/20 animate-ping;
+    }
+
+    .glass-panel {
+        @apply bg-white/5 backdrop-blur-2xl border border-white/10 rounded-3xl shadow-2xl;
+    }
+
+    .magnetic-gradient {
+        @apply bg-gradient-to-r from-magnetic-600 via-magnetic-500 to-techno-600;
+    }
+
+    .tech-button {
+        @apply px-6 py-3 magnetic-gradient rounded-xl font-semibold text-white shadow-lg hover:shadow-2xl hover:scale-105 transition-all duration-300 cursor-pointer;
+    }
+
+    .status-indicator {
+        @apply relative inline-flex h-3 w-3 rounded-full;
+    }
+
+    .status-indicator::before {
+        @apply absolute inline-flex h-full w-full rounded-full bg-current opacity-75 animate-ping;
+        content: '';
+    }
+
+    .schematic-line {
+        @apply stroke-magnetic-400 stroke-2 fill-none transition-all duration-300;
+    }
+
+    .component-node {
+        @apply fill-slate-800 stroke-magnetic-500 stroke-2 transition-all hover:fill-slate-700 cursor-pointer;
+    }
+}
+
+@layer utilities {
+    .text-shadow-glow {
+        text-shadow: 0 0 20px rgba(14, 165, 233, 0.5);
+    }
+
+    .animate-gradient {
+        background-size: 200% 200%;
+        animation: gradient 8s ease infinite;
+    }
+
+    @keyframes gradient {
+
+        0%,
+        100% {
+            background-position: 0% 50%;
+        }
+
+        50% {
+            background-position: 100% 50%;
+        }
+    }
+
+    .perspective-1000 {
+        perspective: 1000px;
+    }
+
+    .transform-3d {
+        transform-style: preserve-3d;
+    }
+
+    .backface-hidden {
+        backface-visibility: hidden;
+    }
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-track {
+    @apply bg-slate-900/50;
+}
+
+::-webkit-scrollbar-thumb {
+    @apply bg-magnetic-600/50 rounded-full hover:bg-magnetic-500/70;
+}
+
+/* 选中文本样式 */
+::selection {
+    @apply bg-magnetic-500/30 text-magnetic-100;
+}

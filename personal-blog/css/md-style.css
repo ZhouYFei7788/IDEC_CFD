@@ -1,0 +1,119 @@
+/* Markdown 文档风格样式 - 全宽布局 */
+
+/* 全宽布局 - 使用左右padding而不是max-width */
+main {
+    width: 100%;
+    margin: 0 auto;
+    padding-left: 15%;
+    padding-right: 15%;
+}
+
+/* 所有section使用统一宽度 */
+section {
+    max-width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+    padding-left: 0;
+    padding-right: 0;
+}
+
+/* 标题样式 - MD 风格 */
+h1 {
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+}
+
+h2 {
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin-top: 2.5rem;
+    margin-bottom: 1.25rem;
+    color: #ffffff;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    padding-bottom: 0.5rem;
+}
+
+h3 {
+    font-weight: 600;
+    margin-top: 1.5rem;
+    margin-bottom: 0.75rem;
+}
+
+/* 段落间距 */
+p {
+    line-height: 1.7;
+    margin-bottom: 1rem;
+}
+
+/* 列表样式 */
+ul,
+ol {
+    line-height: 1.7;
+    margin-bottom: 1rem;
+}
+
+/* 区块间距 - 更紧凑 */
+section {
+    margin-bottom: 4rem;
+}
+
+/* 卡片网格 - 更紧凑 */
+.grid {
+    gap: 1rem !important;
+}
+
+/* 卡片圆角 - 更小更简约 */
+article {
+    border-radius: 0.5rem !important;
+}
+
+/* 按钮样式 - 更简约 */
+a[class*="px-"] {
+    font-size: 0.875rem;
+    border-radius: 0.375rem;
+}
+
+/* 代码块样式 */
+code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.9em;
+    background: rgba(255, 255, 255, 0.05);
+    padding: 0.125rem 0.375rem;
+    border-radius: 0.25rem;
+}
+
+/* Badge 样式 */
+.inline-block[class*="border"] {
+    border-radius: 0.375rem !important;
+}
+
+/* 响应式 */
+@media (max-width: 1400px) {
+    main {
+        padding-left: 10%;
+        padding-right: 10%;
+    }
+}
+
+@media (max-width: 1024px) {
+    main {
+        padding-left: 6%;
+        padding-right: 6%;
+    }
+}
+
+@media (max-width: 768px) {
+    main {
+        padding-left: 1.5rem;
+        padding-right: 1.5rem;
+    }
+
+    h1 {
+        font-size: 2rem;
+    }
+
+    h2 {
+        font-size: 1.5rem;
+    }
+}

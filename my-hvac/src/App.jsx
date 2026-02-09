@@ -1,12 +1,13 @@
 // src/App.jsx
 import React, { useState } from 'react';
-import { Settings, Activity, Wind, Droplets, Zap, Snowflake, Gauge, ArrowDown, ArrowUp, Bell } from 'lucide-react';
+import { Settings, Activity, Wind, Droplets, Zap, Snowflake, Gauge, ArrowDown, ArrowUp, Bell, Download } from 'lucide-react';
 import { useHvacPhysics } from './hooks/useHvacPhysics';
 import { useHistoryData } from './hooks/useHistoryData';
 import { useAlerts } from './hooks/useAlerts';
 import { useEquipmentFaults } from './hooks/useEquipmentFaults';
 import { useCopAnalysis } from './hooks/useCopAnalysis';
 import { cn, getAirColor } from './utils';
+import { exportToExcel } from './utils/exportExcel';
 
 import HvacDiagram from './components/HvacDiagram';
 import EfficiencyPanel from './components/EfficiencyPanel';
@@ -116,6 +117,17 @@ export default function UltimateIECDxDemo() {
                             {statistics.total}
                         </div>
                     )}
+                </div>
+            </button>
+
+            {/* 导出Excel按钮 */}
+            <button
+                onClick={() => exportToExcel(history, params, mode, systemSpecs)}
+                className="fixed top-4 right-24 z-40 p-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 rounded-xl shadow-2xl transition-all hover:scale-105 group"
+                title="导出运行日志到Excel"
+            >
+                <div className="flex items-center gap-2">
+                    <Download size={24} className="text-white" />
                 </div>
             </button>
 

@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# Cloudflare Pages 部署脚本
+# 间接蒸发冷仿真计算平台 - Cloudflare Pages 部署脚本
 # 适合中国用户，访问速度快
 
 set -e
 
-echo "🚀 Cloudflare Pages 部署脚本"
-echo "=============================="
+echo "🚀 间接蒸发冷仿真计算平台 - 部署脚本"
+echo "======================================="
 echo ""
 
 # 检查是否安装了 wrangler
@@ -40,8 +40,8 @@ echo "✅ 构建完成"
 echo ""
 
 # 询问项目名称
-read -p "请输入项目名称 (默认: hvac-simulator): " PROJECT_NAME
-PROJECT_NAME=${PROJECT_NAME:-hvac-simulator}
+read -p "请输入项目名称 (默认: iec-simulation): " PROJECT_NAME
+PROJECT_NAME=${PROJECT_NAME:-iec-simulation}
 
 echo ""
 echo "🚀 开始部署到 Cloudflare Pages..."

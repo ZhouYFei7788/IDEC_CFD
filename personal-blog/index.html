@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="scroll-smooth">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HVAC Engineer | Vue 版个人主页</title>
+
+    <!-- 引入 Tailwind CSS (样式库) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- 引入 Vue 3 (核心框架 - 全球 CDN) -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+
+    <!-- 字体与图标 -->
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
+
+    <!-- Tailwind 配置 -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['Inter', 'sans-serif'], mono: ['JetBrains Mono', 'monospace'] },
+                    colors: {
+                        background: '#09090b', surface: '#18181b', border: '#27272a', muted: '#a1a1aa', accent: '#3b82f6'
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- 引入自定义样式 -->
+    <link rel="stylesheet" href="css/style.css?v=4.0">
+    <link rel="stylesheet" href="css/md-style.css?v=4.0">
+</head>
+
+<body class="bg-background text-white font-sans antialiased min-h-screen">
+
+    <!-- 背景动画球体 -->
+    <div class="background-balls">
+        <div class="ball ball-1"></div>
+        <div class="ball ball-2"></div>
+        <div class="ball ball-3"></div>
+        <div class="ball ball-4"></div>
+        <div class="ball ball-5"></div>
+    </div>
+
+    <!-- Vue 应用挂载点 -->
+    <div id="app" class="relative z-10 flex flex-col min-h-screen">
+
+        <!-- Header -->
+        <header class="fixed top-0 w-full z-50 border-b border-white/5 bg-background/70 backdrop-blur-xl">
+            <div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+                <a href="#"
+                    class="font-mono text-lg font-bold tracking-tighter text-blue-400 hover:text-blue-300 transition-colors">
+                    {{ header.logo }}
+                </a>
+                <nav class="flex items-center gap-6 text-sm font-medium text-muted">
+                    <!-- Vue 循环生成链接 -->
+                    <a v-for="(link, index) in header.links" :key="index" :href="link.href"
+                        class="hover:text-white transition-colors">
+                        {{ link.text }}
+                    </a>
+                    <a href="#" class="text-lg hover:text-white transition-colors"><i class="ri-linkedin-fill"></i></a>
+                </nav>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="flex-grow pt-32 pb-20">
+
+            <!-- Hero Section - 左对齐 MD 风格 -->
+            <section class="mb-24">
+                <div
+                    class="inline-block px-3 py-1 mb-6 text-xs font-mono text-blue-400 border border-blue-900/50 rounded-full bg-blue-900/10">
+                    {{ hero.badge }}
+                </div>
+                <!-- v-html 用于渲染包含 html 标签的标题 -->
+                <h1 class="text-4xl md:text-5xl font-bold tracking-tight mb-4 leading-tight" v-html="hero.titleHtml">
+                </h1>
+                <p class="text-muted text-base md:text-lg mb-8 font-light leading-relaxed max-w-3xl"
+                    v-html="hero.description"></p>
+                <div class="flex gap-4">
+                    <a href="#projects"
+                        class="px-6 py-2.5 bg-white text-black font-medium rounded-md hover:bg-zinc-200 transition-all text-sm">
+                        查看项目
+                    </a>
+                    <a href="#blog"
+                        class="px-6 py-2.5 bg-purple-600 text-white font-medium rounded-md hover:bg-purple-700 transition-all text-sm">
+                        阅读博客
+                    </a>
+                </div>
+            </section>
+
+            <!-- 项目区域 -->
+            <section id="projects" class="mb-16">
+                <div class="flex items-baseline gap-4 mb-6">
+                    <h2 class="text-2xl font-semibold">项目经历</h2>
+                    <span class="text-xs font-mono text-muted">{{ meta.location }}</span>
+                </div>
+
+                <!-- 项目网格 -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-5 auto-rows-auto w-full">
+                    <article v-for="item in projects" :key="item.id" :class="[
+                            'group relative bg-surface border border-border rounded-2xl p-6 transition-all duration-300 hover:-translate-y-1 glow-hover',
+                            // 优化布局：根据项目数量动态调整
+                            projects.length === 1 ? 'md:col-span-3' : (item.span === 2 ? 'md:col-span-2' : ''),
+                            'cursor-pointer p-8',
+                            (item.isExpanded || item.showFullDocument) ? 'flex flex-col' : 'flex flex-col justify-between'
+                        ]" @click="toggleExpand(item)">
+
+                        <!-- 项目卡片内容 -->
+                        <div :class="['flex flex-col', item.showFullDocument ? '' : 'h-full']">
+                            <!-- 背景装饰 -->
+                            <div v-if="item.span === 2"
+                                class="absolute top-0 right-0 w-64 h-64 bg-blue-500/5 rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none">
+                            </div>
+
+                            <div>
+                                <div class="flex justify-between items-start mb-4">
+                                    <div :class="[
+                                        'font-mono text-xs px-2 py-1 rounded border',
+                                        getTagColor(item.tags.category)
+                                    ]">
+                                        {{ item.tags.category }}
+                                    </div>
+                                    <span class="font-mono text-xs text-muted">{{ item.tags.label }}</span>
+                                </div>
+
+                                <h3
+                                    class="text-xl md:text-2xl font-bold text-white mb-4 flex items-center justify-between">
+                                    {{ item.title }}
+                                    <i
+                                        :class="['ri-arrow-down-s-line text-muted text-xl chevron', item.isExpanded || item.showFullDocument ? 'rotate-180' : '']"></i>
+                                </h3>
+
+                                <p class="text-muted leading-relaxed mb-2 text-sm md:text-base">
+                                    {{ item.summary }}
+                                </p>
+                            </div>
+
+                            <!-- 摘要展开的内容 -->
+                            <transition name="expand">
+                                <div v-if="item.isExpanded && !item.showFullDocument"
+                                    class="mt-6 pt-6 border-t border-white/10">
+                                    <ul class="space-y-2 text-sm text-muted list-disc list-inside mb-4">
+                                        <li v-for="(detail, idx) in item.details" :key="idx">
+                                            <strong class="text-zinc-300">{{ detail.label }}：</strong>{{ detail.text }}
+                                        </li>
+                                    </ul>
+                                </div>
+                            </transition>
+
+                            <!-- 技术栈标签 -->
+                            <div v-if="!item.showFullDocument" class="flex flex-wrap gap-2 mt-auto pt-4">
+                                <span v-for="tech in item.techStack" :key="tech"
+                                    class="px-2 py-1 text-xs font-mono border border-border rounded text-zinc-300">
+                                    {{ tech }}
+                                </span>
+                            </div>
+                        </div>
+                    </article>
+                </div>
+            </section>
+
+            <!-- 博客区域 -->
+            <section id="blog" class="mb-16">
+                <h2 class="text-2xl font-semibold mb-6">技术博客</h2>
+
+                <!-- 博客网格 -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-5 auto-rows-auto w-full">
+                    <article v-for="item in blogs" :key="item.id" :data-blog-id="item.id" :class="[
+                            'group relative bg-surface border border-border rounded-2xl p-6 transition-all duration-500 hover:-translate-y-1 glow-hover',
+                            // 展开全文时占据整行，其他卡片动态调整位置
+                            item.showFullDocument ? 'md:col-span-3' : (item.span === 2 ? 'md:col-span-2' : ''),
+                            'cursor-pointer p-8',
+                            (item.isExpanded || item.showFullDocument) ? 'flex flex-col' : 'flex flex-col justify-between'
+                        ]" @click="toggleExpand(item)">
+                        <!-- 博客卡片内容 -->
+                        <div :class="['flex flex-col', item.showFullDocument ? '' : 'h-full']">
+                            <!-- 背景装饰 -->
+                            <div v-if="item.span === 2 || item.showFullDocument"
+                                class="absolute top-0 right-0 w-64 h-64 bg-purple-500/5 rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none">
+                            </div>
+
+                            <div>
+                                <div class="flex justify-between items-start mb-4">
+                                    <div :class="[
+                                        'font-mono text-xs px-2 py-1 rounded border',
+                                        getTagColor(item.tags.category)
+                                    ]">
+                                        {{ item.tags.category }}
+                                    </div>
+                                    <span class="font-mono text-xs text-muted">{{ item.tags.label }}</span>
+                                </div>
+
+                                <h3
+                                    class="text-xl md:text-2xl font-bold text-white mb-4 flex items-center justify-between">
+                                    {{ item.title }}
+                                    <i
+                                        :class="['ri-arrow-down-s-line text-muted text-xl chevron', item.isExpanded || item.showFullDocument ? 'rotate-180' : '']"></i>
+                                </h3>
+
+                                <p class="text-muted leading-relaxed mb-2 text-sm md:text-base">
+                                    {{ item.summary }}
+                                </p>
+                            </div>
+
+                            <!-- 摘要展开的内容 -->
+                            <transition name="expand">
+                                <div v-if="item.isExpanded && !item.showFullDocument"
+                                    class="mt-6 pt-6 border-t border-white/10">
+                                    <ul class="space-y-2 text-sm text-muted list-disc list-inside mb-4">
+                                        <li v-for="(detail, idx) in item.details" :key="idx">
+                                            <strong class="text-zinc-300">{{ detail.label }}：</strong>{{ detail.text }}
+                                        </li>
+                                    </ul>
+                                    <!-- 查看完整文档按钮 -->
+                                    <button v-if="item.fullDocument" @click.stop="toggleFullDocument(item)"
+                                        class="mt-4 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2">
+                                        <i class="ri-file-text-line"></i>
+                                        展开完整技术文档
+                                    </button>
+                                </div>
+                            </transition>
+
+                            <!-- 完整文档展开 -->
+                            <transition name="document-expand">
+                                <div v-if="item.showFullDocument" class="mt-6 pt-6 border-t border-white/10 w-full">
+                                    <!-- 收起按钮 -->
+                                    <div class="sticky top-20 z-10 mb-6 -mt-2 -pt-2">
+                                        <button @click.stop="toggleFullDocument(item)"
+                                            class="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2 shadow-lg">
+                                            <i class="ri-arrow-up-s-line"></i>
+                                            收起文档
+                                        </button>
+                                    </div>
+                                    <!-- 完整文档内容 - 展开时使用更大的容器 -->
+                                    <div class="document-content-full mb-6 w-full" v-html="item.fullDocument"></div>
+                                    <!-- 技术栈标签在文档下方 -->
+                                    <div class="flex flex-wrap gap-2 pt-4 border-t border-white/10">
+                                        <span v-for="tech in item.techStack" :key="tech"
+                                            class="px-2 py-1 text-xs font-mono border border-border rounded text-zinc-300">
+                                            {{ tech }}
+                                        </span>
+                                    </div>
+                                </div>
+                            </transition>
+
+                            <!-- 技术栈标签（未展开文档时显示） -->
+                            <div v-if="!item.showFullDocument" class="flex flex-wrap gap-2 mt-auto pt-4">
+                                <span v-for="tech in item.techStack" :key="tech"
+                                    class="px-2 py-1 text-xs font-mono border border-border rounded text-zinc-300">
+                                    {{ tech }}
+                                </span>
+                            </div>
+                        </div>
+                    </article>
+                </div>
+            </section>
+
+            <!-- 工具箱区域 -->
+            <section id="tools" class="mb-16">
+                <h2 class="text-2xl font-semibold mb-6">工具箱</h2>
+
+                <!-- 工具箱网格 -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-5 auto-rows-auto w-full">
+                    <article v-for="item in tools" :key="item.id" :class="[
+                            'group relative bg-surface border border-border rounded-2xl p-6 transition-all duration-300 hover:-translate-y-1 glow-hover flex flex-col justify-between',
+                            // 优化布局：让卡片更好地填充空间
+                            item.span === 2 ? 'md:col-span-2' : '',
+                            // 如果只有2个卡片，让它们平均分配
+                            tools.length === 2 && item.span !== 2 ? 'md:col-span-1' : ''
+                        ]">
+                        <!-- 技能列表卡片 -->
+                        <div v-if="item.type === 'skill'">
+                            <div class="mb-4" :class="item.colorClass"><i :class="[item.icon, 'text-2xl']"></i></div>
+                            <h3 class="text-lg font-bold text-white mb-2">{{ item.title }}</h3>
+                            <ul class="text-sm text-muted space-y-2 list-disc list-inside">
+                                <li v-for="skill in item.list" :key="skill">{{ skill }}</li>
+                            </ul>
+                        </div>
+
+                        <!-- 工具标签卡片 -->
+                        <div v-else-if="item.type === 'tools'">
+                            <div class="mb-4" :class="item.colorClass"><i :class="[item.icon, 'text-2xl']"></i></div>
+                            <h3 class="text-lg font-bold text-white mb-2">{{ item.title }}</h3>
+                            <div class="flex flex-wrap gap-2">
+                                <span v-for="tool in item.tags" :key="tool"
+                                    class="px-2 py-1 text-xs font-mono bg-white/5 rounded">
+                                    {{ tool }}
+                                </span>
+                            </div>
+                        </div>
+
+                        <!-- 引言卡片 -->
+                        <div v-else-if="item.type === 'quote'"
+                            class="flex items-center justify-between h-full bg-gradient-to-br from-blue-900/20 to-transparent">
+                            <div class="pr-4 relative z-10">
+                                <h3 class="text-xl font-bold text-white mb-2">{{ item.title }}</h3>
+                                <p class="text-muted text-sm max-w-lg" v-html="item.text"></p>
+                            </div>
+                            <div class="hidden sm:block text-4xl text-blue-500 opacity-50">
+                                <i :class="item.icon"></i>
+                            </div>
+                        </div>
+                    </article>
+                </div>
+            </section>
+
+            <!-- 在校经历板块 -->
+            <section id="education" class="mb-16">
+                <h2 class="text-2xl font-semibold mb-6">{{ education.title }}</h2>
+                <!-- 成就卡片网格 -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+                    <article v-for="achievement in education.achievements" :key="achievement.id"
+                        class="group relative bg-surface border border-border rounded-2xl p-6 transition-all duration-300 hover:-translate-y-1 glow-hover">
+                        <div class="flex flex-col h-full">
+                            <!-- 图标和年份 -->
+                            <div class="flex items-start justify-between mb-4">
+                                <div :class="[achievement.colorClass, 'text-3xl']">
+                                    <i :class="achievement.icon"></i>
+                                </div>
+                                <span class="font-mono text-xs text-muted">{{ achievement.year }}</span>
+                            </div>
+
+                            <!-- 标题和奖项 -->
+                            <h3 class="text-xl font-bold text-white mb-2">
+                                {{ achievement.title }}
+                                <span v-if="achievement.award" class="text-sm font-normal text-blue-400 ml-2">
+                                    ({{ achievement.award }})
+                                </span>
+                            </h3>
+
+                            <!-- 描述 -->
+                            <p class="text-muted text-sm leading-relaxed flex-grow">
+                                {{ achievement.description }}
+                            </p>
+                        </div>
+                    </article>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="border-t border-white/5 py-8 mt-12">
+            <div class="max-w-6xl mx-auto px-6 flex flex-col md:flex-row items-center justify-between gap-4">
+                <div class="text-muted text-sm font-mono" v-html="footer.copyright"></div>
+                <div class="text-xs font-mono text-muted opacity-50 hidden md:inline">{{ footer.locations }}</div>
+            </div>
+        </footer>
+
+    </div>
+
+    <!-- 引入 Vue 应用逻辑 -->
+    <script src="js/main.js"></script>
+</body>
+
+</html>
