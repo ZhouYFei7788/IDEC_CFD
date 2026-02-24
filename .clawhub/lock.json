@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "skills": {
+    "web-deploy-github": {
+      "version": "1.0.0",
+      "installedAt": 1771894504717
+    },
+    "mupeng-web-claude": {
+      "version": "1.0.0",
+      "installedAt": 1771894513818
+    },
+    "find-skills": {
+      "version": "0.1.0",
+      "installedAt": 1771894575857
+    },
+    "proactive-solvr": {
+      "version": "1.6.7",
+      "installedAt": 1771894621875
+    },
+    "evolver": {
+      "version": "1.14.0",
+      "installedAt": 1771894691851
+    },
+    "desearch-web-search": {
+      "version": "1.0.1",
+      "installedAt": 1771894754401
+    }
+  }
+}
