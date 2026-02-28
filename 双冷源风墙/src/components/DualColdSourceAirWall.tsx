@@ -140,8 +140,8 @@ const Valve: React.FC<{
             {/* 开度背景和文字 */}
             {opening !== undefined && (
                 <g>
-                    <rect x={22} y={textY - 6} width={18} height={8} fill={COLORS.surface} rx={1} />
-                    <text x={24} y={textY} textAnchor="start" fontSize="7" fill={color} fontWeight="bold">{opening}%</text>
+                    <rect x={22} y={textY - 6} width={26} height={10} fill={COLORS.surface} rx={1} />
+                    <text x={24} y={textY + 1} textAnchor="start" fontSize="8" fill={color} fontWeight="bold">{opening.toFixed(1)}%</text>
                 </g>
             )}
         </g>
@@ -606,6 +606,20 @@ export default function DualColdSourceAirWall() {
                     {/* 风机中心的高度分布, 传入送风温度计算变色 */}
                     <AirflowParticles fanYPositions={[100, 300, 500]} active={true} supplyTemp={data.supplyAirTemp} />
 
+                    {/* 回风温度 (Return Air Temp) 显示标签 */}
+                    <g transform="translate(100, 300)">
+                        <rect x={-35} y={-12} width={70} height={24} fill={COLORS.surface} stroke={COLORS.suction} strokeWidth={1.5} rx={4} />
+                        <text x={0} y={4} textAnchor="middle" fontSize="12" fill={COLORS.suction} className="font-mono font-bold">{data.returnAirTemp.toFixed(1)}°C</text>
+                        <text x={0} y={22} textAnchor="middle" fontSize="8" fill={COLORS.textDim}>回风温度 T_ra</text>
+                    </g>
+
+                    {/* 送风温度 (Supply Air Temp) 显示标签 */}
+                    <g transform="translate(900, 300)">
+                        <rect x={-35} y={-12} width={70} height={24} fill={COLORS.surface} stroke={COLORS.airflow} strokeWidth={1.5} rx={4} />
+                        <text x={0} y={4} textAnchor="middle" fontSize="12" fill={COLORS.airflow} className="font-mono font-bold">{data.supplyAirTemp.toFixed(1)}°C</text>
+                        <text x={0} y={22} textAnchor="middle" fontSize="8" fill={COLORS.textDim}>送风温度 T_sa</text>
+                    </g>
+
                     {/* ====== 低压制冷剂管路 ====== */}
                     {/* 从板换下边长靠左(380, 340) → (380, 560) → (700, 560) → (700, 300) → (800, 300)分叉 */}
 
@@ -674,6 +688,9 @@ export default function DualColdSourceAirWall() {
                         {/* 文字在上方 */}
                         <text x={0} y={-18} textAnchor="middle" fontSize="9" fill={COLORS.coolingWater} fontWeight="bold">进水</text>
                         <text x={0} y={-8} textAnchor="middle" fontSize="7" fill={COLORS.textDim}>Water In</text>
+                        {/* 进水温度数值 */}
+                        <rect x={20} y={-10} width={45} height={20} fill={COLORS.surface} stroke={COLORS.coolingWater} strokeWidth={1} rx={2} />
+                        <text x={42} y={3} textAnchor="middle" fontSize="10" fill={COLORS.coolingWater} className="font-mono font-bold">{data.coolingWaterIn.toFixed(1)}°C</text>
                     </g>
 
                     {/* 进水管路：(1000, 580) → (600, 580) → (600, 500) 水盘管下边长中心 */}
@@ -725,6 +742,9 @@ export default function DualColdSourceAirWall() {
                         {/* 文字在上方 */}
                         <text x={0} y={-18} textAnchor="middle" fontSize="9" fill={COLORS.coolingWaterHot} fontWeight="bold">出水</text>
                         <text x={0} y={-8} textAnchor="middle" fontSize="7" fill={COLORS.textDim}>Water Out</text>
+                        {/* 出水温度数值 */}
+                        <rect x={-65} y={-10} width={45} height={20} fill={COLORS.surface} stroke={COLORS.coolingWaterHot} strokeWidth={1} rx={2} />
+                        <text x={-43} y={3} textAnchor="middle" fontSize="10" fill={COLORS.coolingWaterHot} className="font-mono font-bold">{data.coolingWaterOut.toFixed(1)}°C</text>
                     </g>
 
                     {/* 板换出水管路：板换上边长靠右(420, 260) → (420, 30) → (100, 30) */}
