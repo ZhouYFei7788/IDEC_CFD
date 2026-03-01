@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { motion } from 'framer-motion';
+import React, { useEffect, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { useDualColdSourcePhysics } from '../hooks/useDualColdSourcePhysics';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
@@ -54,6 +54,8 @@ type SeriesKey =
     | 'totalCooling'
     | 'naturalCooling'
     | 'dxCooling'
+    | 'fanSpeed'
+    | 'compHz'
     | 'highPressure'
     | 'lowPressure'
     | 'evapTemp'
@@ -61,7 +63,8 @@ type SeriesKey =
 
 type ChartPreset = 'air' | 'water' | 'capacity' | 'refrigerant' | 'custom';
 type SectionKey = 'air' | 'water' | 'capacity' | 'actuator' | 'runtime' | 'compressor';
-type AxisId = 'temp' | 'cooling' | 'pressure' | 'percent';
+type AxisId = 'temp' | 'cooling' | 'pressure' | 'percent' | 'speed';
+type ExportFormat = 'json' | 'excel';
 
 const SERIES_META: Record<SeriesKey, { label: string; unit: string; color: string; axis: AxisId }> = {
     supplyAirTemp: { label: '送风温度', unit: '°C', color: COLORS.airflow, axis: 'temp' },
@@ -73,6 +76,8 @@ const SERIES_META: Record<SeriesKey, { label: string; unit: string; color: strin
     totalCooling: { label: '总制冷量', unit: 'kW', color: '#22d3ee', axis: 'cooling' },
     naturalCooling: { label: '自然冷却量', unit: 'kW', color: COLORS.coolingWater, axis: 'cooling' },
     dxCooling: { label: 'DX制冷量', unit: 'kW', color: COLORS.lowPressure, axis: 'cooling' },
+    fanSpeed: { label: '风机转速', unit: 'RPM', color: '#a78bfa', axis: 'speed' },
+    compHz: { label: '压缩机频率', unit: 'Hz', color: COLORS.highPressure, axis: 'speed' },
     highPressure: { label: '高压', unit: 'Bar', color: COLORS.highPressure, axis: 'pressure' },
     lowPressure: { label: '低压', unit: 'Bar', color: COLORS.lowPressure, axis: 'pressure' },
     evapTemp: { label: '蒸发温度', unit: '°C', color: '#38bdf8', axis: 'temp' },
@@ -335,16 +340,15 @@ const AirflowParticles: React.FC<{
 
     const particles: React.ReactNode[] = [];
     fanYPositions.forEach((fanY, fanIndex) => {
-        // 每个风机 80 高度，分布 6 条轨迹
-        for (let i = 0; i < 6; i++) {
-            const yOffset = (i - 2.5) * 12;
+        // 减少轨迹与粒子数量以降低每帧重绘负载
+        for (let i = 0; i < 3; i++) {
+            const yOffset = (i - 1) * 16;
             const y = fanY + yOffset;
             const isLight = i % 2 === 0;
 
-            // 每条轨迹放置 3 个粒子动画并错开时间
-            for (let j = 0; j < 3; j++) {
-                const delay = j * 1.5 + (((fanIndex * 7) + (i * 13) + (j * 17)) % 10) / 10 * 0.8;
-                const duration = 4.5 + (((fanIndex * 11) + (i * 19) + (j * 23)) % 10) / 10 * 1.5;
+            for (let j = 0; j < 2; j++) {
+                const delay = j * 1.2 + (((fanIndex * 7) + (i * 13) + (j * 17)) % 10) / 10 * 0.6;
+                const duration = 5 + (((fanIndex * 11) + (i * 19) + (j * 23)) % 10) / 10;
 
                 particles.push(
                     <g key={`particle-${fanIndex}-${i}-${j}`}>
@@ -356,13 +360,6 @@ const AirflowParticles: React.FC<{
                             strokeLinecap="round"
                             initial={{ x: 230, opacity: 0 }}
                             animate={{ x: 1300, opacity: [0, 0.5, 0.7, 0.5, 0] }}
-                            transition={{ duration, repeat: Infinity, ease: 'linear', delay }}
-                        />
-                        <motion.circle
-                            cx={0} cy={y} r={isLight ? 1.5 : 2.5}
-                            fill="url(#airflow-gradient)"
-                            initial={{ x: 230, opacity: 0 }}
-                            animate={{ x: 1300, opacity: [0, 0.8, 1, 0.8, 0] }}
                             transition={{ duration, repeat: Infinity, ease: 'linear', delay }}
                         />
                     </g>
@@ -471,7 +468,8 @@ export default function DualColdSourceAirWall() {
         createSeriesSelection(['supplyAirTemp', 'returnAirTemp', 'coolingWaterIn', 'coolingWaterOut', 'cfcDemand'])
     );
     const [chartPreset, setChartPreset] = useState<ChartPreset>('custom');
-    const trendChartRef = useRef<HTMLDivElement | null>(null);
+    const [modalSeries, setModalSeries] = useState<SeriesKey | null>(null);
+    const [exportFormat, setExportFormat] = useState<ExportFormat>('json');
 
     const toggleSection = (sectionKey: SectionKey) => {
         setExpandedSections((prev) => ({ ...prev, [sectionKey]: !prev[sectionKey] }));
@@ -482,17 +480,112 @@ export default function DualColdSourceAirWall() {
         setSelectedSeries((prev) => ({ ...prev, [seriesKey]: !prev[seriesKey] }));
     };
 
-    const focusSeries = (seriesKey: SeriesKey) => {
-        setChartPreset('custom');
-        setSelectedSeries(createSeriesSelection([seriesKey]));
-        window.requestAnimationFrame(() => {
-            trendChartRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        });
+    const openSeriesModal = (seriesKey: SeriesKey) => {
+        setModalSeries(seriesKey);
     };
 
     const applyPreset = (preset: Exclude<ChartPreset, 'custom'>) => {
         setChartPreset(preset);
         setSelectedSeries(createSeriesSelection(PRESET_SERIES[preset]));
+    };
+
+    const roundExportNumbers = (value: any): any => {
+        if (typeof value === 'number') {
+            return Number(value.toFixed(2));
+        }
+        if (Array.isArray(value)) {
+            return value.map(roundExportNumbers);
+        }
+        if (value && typeof value === 'object') {
+            return Object.fromEntries(
+                Object.entries(value).map(([key, innerValue]) => [key, roundExportNumbers(innerValue)])
+            );
+        }
+        return value;
+    };
+
+    const escapeCsvValue = (value: unknown) => {
+        const text = value === null || value === undefined ? '' : String(value);
+        if (/[",\n]/.test(text)) {
+            return `"${text.replace(/"/g, '""')}"`;
+        }
+        return text;
+    };
+
+    const buildExcelCsv = (payload: Record<string, any>) => {
+        const lines: string[] = [];
+        const addSection = (title: string, source: Record<string, any>) => {
+            lines.push(title);
+            lines.push('字段,数值');
+            Object.entries(source).forEach(([key, value]) => {
+                lines.push(`${escapeCsvValue(key)},${escapeCsvValue(value)}`);
+            });
+            lines.push('');
+        };
+
+        lines.push(`导出时间,${escapeCsvValue(payload.exportedAt)}`);
+        lines.push('');
+        addSection('控制输入 controlInputs', payload.controlInputs ?? {});
+        addSection('实时状态 realtimeState', payload.realtimeState ?? {});
+
+        if (payload.latestHistoryPoint) {
+            addSection('最新历史点 latestHistoryPoint', payload.latestHistoryPoint);
+        }
+
+        const historyRows = Array.isArray(payload.recentHistory) ? payload.recentHistory : [];
+        if (historyRows.length > 0) {
+            const headers = Object.keys(historyRows[0]);
+            lines.push('历史序列 recentHistory');
+            lines.push(headers.map(escapeCsvValue).join(','));
+            historyRows.forEach((row: Record<string, any>) => {
+                lines.push(headers.map((header) => escapeCsvValue(row[header])).join(','));
+            });
+            lines.push('');
+        }
+
+        return `\uFEFF${lines.join('\n')}`;
+    };
+
+    const exportCurrentParameters = () => {
+        const now = new Date();
+        const exportPayload = roundExportNumbers({
+            exportedAt: now.toISOString(),
+            controlInputs: {
+                mode,
+                heatLoad,
+                supplyTempSet,
+                cwInletTemp,
+            },
+            realtimeState: {
+                ...data,
+                fanFrequencyHz: Number((data.fanSpeed / 60).toFixed(2)),
+            },
+            latestHistoryPoint: history.length > 0 ? history[history.length - 1] : null,
+            recentHistory: history,
+        });
+
+        const fileStamp = now.toISOString().replace(/[:.]/g, '-');
+        let blob: Blob;
+        let fileName: string;
+
+        if (exportFormat === 'excel') {
+            blob = new Blob([buildExcelCsv(exportPayload)], {
+                type: 'text/csv;charset=utf-8',
+            });
+            fileName = `dual-cold-source-params-${fileStamp}.csv`;
+        } else {
+            blob = new Blob([JSON.stringify(exportPayload, null, 2)], {
+                type: 'application/json;charset=utf-8',
+            });
+            fileName = `dual-cold-source-params-${fileStamp}.json`;
+        }
+
+        const exportUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = exportUrl;
+        link.download = fileName;
+        link.click();
+        URL.revokeObjectURL(exportUrl);
     };
 
     const renderMetricCard = (
@@ -510,7 +603,7 @@ export default function DualColdSourceAirWall() {
                 borderColor: COLORS.border,
                 cursor: seriesKey ? 'pointer' : 'default',
             }}
-            onClick={seriesKey ? () => focusSeries(seriesKey) : undefined}
+            onClick={seriesKey ? () => openSeriesModal(seriesKey) : undefined}
         >
             <span className="absolute left-0 top-0 h-full w-[2px] rounded-l-md" style={{ backgroundColor: color }} />
             <div className="text-[11px]" style={{ color: COLORS.textDim }}>{label}</div>
@@ -519,8 +612,8 @@ export default function DualColdSourceAirWall() {
                 <span className="text-xs text-gray-500">{unit}</span>
             </div>
             {seriesKey && (
-                <div className="mt-1 text-[10px]" style={{ color: selectedSeries[seriesKey] ? color : COLORS.textDim }}>
-                    {selectedSeries[seriesKey] && activeSeries.length === 1 ? '当前正在查看' : '点击查看趋势'}
+                <div className="mt-1 text-[10px]" style={{ color: COLORS.textDim }}>
+                    点击查看趋势弹窗
                 </div>
             )}
         </button>
@@ -533,7 +626,7 @@ export default function DualColdSourceAirWall() {
         color: string,
         content: React.ReactNode
     ) => (
-        <div className="rounded-lg border p-3" style={{ borderColor: COLORS.border, backgroundColor: COLORS.surface }}>
+        <div className="rounded-lg border px-3 py-2" style={{ borderColor: COLORS.border, backgroundColor: COLORS.surface }}>
             <button
                 type="button"
                 className="w-full flex items-center justify-between gap-3 text-left"
@@ -548,11 +641,21 @@ export default function DualColdSourceAirWall() {
                     <span className="text-sm" style={{ color: COLORS.textDim }}>{expandedSections[sectionKey] ? '▾' : '▸'}</span>
                 </div>
             </button>
-            {expandedSections[sectionKey] && (
-                <div className="mt-3 pt-3 border-t" style={{ borderColor: COLORS.border }}>
-                    {content}
-                </div>
-            )}
+            <AnimatePresence initial={false}>
+                {expandedSections[sectionKey] && (
+                    <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.2, ease: 'easeOut' }}
+                        className="overflow-hidden"
+                    >
+                        <div className="mt-2 pt-2 border-t" style={{ borderColor: COLORS.border }}>
+                            {content}
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </div>
     );
 
@@ -560,9 +663,17 @@ export default function DualColdSourceAirWall() {
     const axisUsage = activeSeries.reduce((acc, seriesKey) => {
         acc[SERIES_META[seriesKey].axis] = true;
         return acc;
-    }, { temp: false, cooling: false, pressure: false, percent: false } as Record<AxisId, boolean>);
-    const rightAxisFamilies = (['percent', 'pressure', 'cooling'] as AxisId[]).filter((axis) => axisUsage[axis]);
-    const primaryRightAxis = axisUsage.percent ? 'percent' : axisUsage.pressure ? 'pressure' : axisUsage.cooling ? 'cooling' : null;
+    }, { temp: false, cooling: false, pressure: false, percent: false, speed: false } as Record<AxisId, boolean>);
+    const rightAxisFamilies = (['percent', 'pressure', 'cooling', 'speed'] as AxisId[]).filter((axis) => axisUsage[axis]);
+    const primaryRightAxis = axisUsage.percent
+        ? 'percent'
+        : axisUsage.pressure
+            ? 'pressure'
+            : axisUsage.cooling
+                ? 'cooling'
+                : axisUsage.speed
+                    ? 'speed'
+                    : null;
     const modeLabel = data.effectiveMode === 'natural' ? '自然冷却' : data.effectiveMode === 'hybrid' ? '混合模式' : '机械制冷';
     const modeColor = data.effectiveMode === 'natural' ? COLORS.coolingWater : data.effectiveMode === 'hybrid' ? '#f59e0b' : COLORS.highPressure;
     const cfcColor = data.cfcDemand >= 75 ? '#f43f5e' : data.cfcDemand >= 45 ? '#f59e0b' : '#22c55e';
@@ -591,7 +702,7 @@ export default function DualColdSourceAirWall() {
                 type="button"
                 className="rounded-md border px-3 py-2 text-left"
                 style={{ backgroundColor: COLORS.background, borderColor: COLORS.border }}
-                onClick={() => focusSeries('supplyAirTemp')}
+                onClick={() => openSeriesModal('supplyAirTemp')}
             >
                 <div className="flex items-center justify-between">
                     <span className="text-xs" style={{ color: COLORS.textDim }}>送风温度</span>
@@ -601,8 +712,8 @@ export default function DualColdSourceAirWall() {
                     <span className="text-2xl font-black font-mono" style={{ color: COLORS.airflow }}>{data.supplyAirTemp.toFixed(1)}</span>
                     <span className="text-xs text-gray-500">°C</span>
                 </div>
-                <div className="mt-1 text-[10px]" style={{ color: selectedSeries.supplyAirTemp ? COLORS.airflow : COLORS.textDim }}>
-                    {selectedSeries.supplyAirTemp && activeSeries.length === 1 ? '当前正在查看' : '点击查看趋势'}
+                <div className="mt-1 text-[10px]" style={{ color: COLORS.textDim }}>
+                    点击查看趋势弹窗
                 </div>
             </button>
 
@@ -610,7 +721,7 @@ export default function DualColdSourceAirWall() {
                 type="button"
                 className="rounded-md border px-3 py-2 text-left"
                 style={{ backgroundColor: COLORS.background, borderColor: COLORS.border }}
-                onClick={() => focusSeries('returnAirTemp')}
+                onClick={() => openSeriesModal('returnAirTemp')}
             >
                 <div className="flex items-center justify-between">
                     <span className="text-xs" style={{ color: COLORS.textDim }}>回风温度</span>
@@ -620,8 +731,8 @@ export default function DualColdSourceAirWall() {
                     <span className="text-2xl font-black font-mono" style={{ color: COLORS.suction }}>{data.returnAirTemp.toFixed(1)}</span>
                     <span className="text-xs text-gray-500">°C</span>
                 </div>
-                <div className="mt-1 text-[10px]" style={{ color: selectedSeries.returnAirTemp ? COLORS.suction : COLORS.textDim }}>
-                    {selectedSeries.returnAirTemp && activeSeries.length === 1 ? '当前正在查看' : '点击查看趋势'}
+                <div className="mt-1 text-[10px]" style={{ color: COLORS.textDim }}>
+                    点击查看趋势弹窗
                 </div>
             </button>
 
@@ -629,7 +740,7 @@ export default function DualColdSourceAirWall() {
                 type="button"
                 className="rounded-md border px-3 py-2 text-left"
                 style={{ backgroundColor: COLORS.background, borderColor: COLORS.border }}
-                onClick={() => focusSeries('cfcDemand')}
+                onClick={() => openSeriesModal('cfcDemand')}
             >
                 <div className="flex items-center justify-between">
                     <span className="text-xs" style={{ color: COLORS.textDim }}>CFC需求</span>
@@ -639,8 +750,8 @@ export default function DualColdSourceAirWall() {
                     <span className="text-2xl font-black font-mono" style={{ color: cfcColor }}>{data.cfcDemand.toFixed(0)}</span>
                     <span className="text-xs text-gray-500">%</span>
                 </div>
-                <div className="mt-1 text-[10px]" style={{ color: selectedSeries.cfcDemand ? cfcColor : COLORS.textDim }}>
-                    {selectedSeries.cfcDemand && activeSeries.length === 1 ? '当前正在查看' : '点击查看趋势'}
+                <div className="mt-1 text-[10px]" style={{ color: COLORS.textDim }}>
+                    点击查看趋势弹窗
                 </div>
             </button>
 
@@ -659,7 +770,7 @@ export default function DualColdSourceAirWall() {
                 type="button"
                 className="rounded-md border px-3 py-2 text-left"
                 style={{ backgroundColor: COLORS.background, borderColor: COLORS.border }}
-                onClick={() => focusSeries('totalCooling')}
+                onClick={() => openSeriesModal('totalCooling')}
             >
                 <div className="flex items-center justify-between">
                     <span className="text-xs" style={{ color: COLORS.textDim }}>总制冷量</span>
@@ -669,15 +780,15 @@ export default function DualColdSourceAirWall() {
                     <span className="text-2xl font-black font-mono" style={{ color: '#22d3ee' }}>{data.totalCooling.toFixed(1)}</span>
                     <span className="text-xs text-gray-500">kW</span>
                 </div>
-                <div className="mt-1 text-[10px]" style={{ color: selectedSeries.totalCooling ? '#22d3ee' : COLORS.textDim }}>
-                    {selectedSeries.totalCooling && activeSeries.length === 1 ? '当前正在查看' : '点击查看趋势'}
+                <div className="mt-1 text-[10px]" style={{ color: COLORS.textDim }}>
+                    点击查看趋势弹窗
                 </div>
             </button>
         </div>
     );
 
     const renderCollapsibleSections = () => (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-2">
             {renderSection(
                 'air',
                 '空气侧参数',
@@ -728,18 +839,16 @@ export default function DualColdSourceAirWall() {
             {renderSection(
                 'runtime',
                 '运行状态',
-                `风机 ${data.fanSpeed.toFixed(0)} RPM · 频率 ${data.compHz.toFixed(1)} Hz`,
+                `风机 ${data.fanSpeed.toFixed(0)} RPM (${(data.fanSpeed / 60).toFixed(2)}Hz) · 压缩机 ${data.compHz.toFixed(1)} Hz`,
                 '#a78bfa',
                 <div className="space-y-3">
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                        {renderMetricCard('风机转速', data.fanSpeed.toFixed(0), 'RPM', '#a78bfa', 'fanSpeed')}
                         <div className="rounded-md border px-3 py-2" style={{ borderColor: COLORS.border, backgroundColor: COLORS.background }}>
-                            <div className="text-xs" style={{ color: COLORS.textDim }}>风机转速</div>
-                            <div className="mt-1 text-xl font-black font-mono" style={{ color: '#a78bfa' }}>{data.fanSpeed.toFixed(0)} <span className="text-xs text-gray-500">RPM</span></div>
+                            <div className="text-xs" style={{ color: COLORS.textDim }}>风机频率</div>
+                            <div className="mt-1 text-xl font-black font-mono" style={{ color: '#8b5cf6' }}>{(data.fanSpeed / 60).toFixed(2)} <span className="text-xs text-gray-500">Hz</span></div>
                         </div>
-                        <div className="rounded-md border px-3 py-2" style={{ borderColor: COLORS.border, backgroundColor: COLORS.background }}>
-                            <div className="text-xs" style={{ color: COLORS.textDim }}>压缩机频率</div>
-                            <div className="mt-1 text-xl font-black font-mono" style={{ color: COLORS.highPressure }}>{data.compHz.toFixed(1)} <span className="text-xs text-gray-500">Hz</span></div>
-                        </div>
+                        {renderMetricCard('压缩机频率', data.compHz.toFixed(1), 'Hz', COLORS.highPressure, 'compHz')}
                         <div className="rounded-md border px-3 py-2" style={{ borderColor: COLORS.border, backgroundColor: COLORS.background }}>
                             <div className="text-xs" style={{ color: COLORS.textDim }}>压缩机台数</div>
                             <div className="mt-1 text-xl font-black font-mono" style={{ color: COLORS.coolingWater }}>{data.activeCompressors}<span className="text-xs text-gray-500">/4</span></div>
@@ -905,6 +1014,14 @@ export default function DualColdSourceAirWall() {
                                 hide={primaryRightAxis !== 'percent'}
                                 domain={[0, 100]}
                             />
+                            <YAxis
+                                yAxisId="speed"
+                                orientation="right"
+                                stroke="#a78bfa"
+                                tick={{ fill: '#a78bfa', fontSize: 11 }}
+                                hide={primaryRightAxis !== 'speed'}
+                                domain={[(min: number) => Math.floor(Math.max(0, min - 5)), (max: number) => Math.ceil(max + 5)]}
+                            />
                             <Tooltip content={renderChartTooltip} />
                             {activeSeries.map((seriesKey) => (
                                 <Line
@@ -924,6 +1041,74 @@ export default function DualColdSourceAirWall() {
             </div>
         </div>
     );
+
+    const renderSeriesModal = () => {
+        if (!modalSeries) {
+            return null;
+        }
+
+        const meta = SERIES_META[modalSeries];
+        const latestValue = history.length > 0 ? history[history.length - 1][modalSeries] : 0;
+
+        return (
+            <div
+                className="fixed inset-0 z-50 bg-black/65 backdrop-blur-[1px] p-4 flex items-center justify-center"
+                onClick={() => setModalSeries(null)}
+            >
+                <motion.div
+                    initial={{ opacity: 0, y: 20, scale: 0.98 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="w-full max-w-4xl rounded-xl border p-4"
+                    style={{ backgroundColor: COLORS.surface, borderColor: COLORS.border }}
+                    onClick={(event) => event.stopPropagation()}
+                >
+                    <div className="flex items-start justify-between gap-3 mb-3">
+                        <div>
+                            <div className="text-xs" style={{ color: COLORS.textDim }}>参数趋势</div>
+                            <div className="text-lg font-bold flex items-baseline gap-2" style={{ color: meta.color }}>
+                                {meta.label}
+                                <span className="text-sm font-mono" style={{ color: COLORS.text }}>
+                                    {latestValue.toFixed(1)} {meta.unit}
+                                </span>
+                            </div>
+                        </div>
+                        <button
+                            type="button"
+                            className="px-2.5 py-1 rounded-md border text-xs"
+                            style={{ borderColor: COLORS.border, color: COLORS.textMuted }}
+                            onClick={() => setModalSeries(null)}
+                        >
+                            关闭
+                        </button>
+                    </div>
+                    <div className="h-[340px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <LineChart data={history}>
+                                <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} opacity={0.35} />
+                                <XAxis dataKey="time" stroke={COLORS.textDim} tick={{ fill: COLORS.textDim, fontSize: 11 }} minTickGap={24} />
+                                <YAxis
+                                    stroke={meta.color}
+                                    tick={{ fill: meta.color, fontSize: 11 }}
+                                    domain={meta.axis === 'percent' ? [0, 100] : ['auto', 'auto']}
+                                />
+                                <Tooltip content={renderChartTooltip} />
+                                <Line
+                                    type="monotone"
+                                    dataKey={modalSeries}
+                                    stroke={meta.color}
+                                    strokeWidth={2.5}
+                                    dot={false}
+                                    isAnimationActive={false}
+                                />
+                            </LineChart>
+                        </ResponsiveContainer>
+                    </div>
+                </motion.div>
+            </div>
+        );
+    };
 
     return (
         <div className="min-h-screen w-full p-4" style={{ backgroundColor: COLORS.background }}>
@@ -973,7 +1158,7 @@ export default function DualColdSourceAirWall() {
 
                     {/* ====== 坐标轴辅助线 (设置 SHOW_AXIS = false 即可去除) ====== */}
                     {(() => {
-                        const SHOW_AXIS = true; // 设置为 false 即可去除坐标轴
+                        const SHOW_AXIS = false; // 关闭辅助线可显著减少绘制开销
                         if (!SHOW_AXIS) return null;
 
                         return (
@@ -1013,7 +1198,7 @@ export default function DualColdSourceAirWall() {
 
                                 {/* 提示文字 */}
                                 <text x={700} y={580} textAnchor="middle" fontSize="12" fill="#f59e0b">
-                                    坐标轴辅助线 (SHOW_AXIS = true)
+                                    坐标轴辅助线 (SHOW_AXIS = false)
                                 </text>
                             </g>
                         );
@@ -1249,106 +1434,123 @@ export default function DualColdSourceAirWall() {
             </div>
 
             {/* 运行模式和热负荷拉杆 Operating Mode & Heat Load */}
-            <div className="mt-3 flex flex-col md:flex-row gap-4">
-                {/* 模式选择 */}
-                <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
-                    {[
-                        { key: 'auto', label: '自动模式', labelEn: 'Auto Mode', desc: '自动计算CFC需求并调度自然/混合/机械' },
-                        { key: 'natural', label: '自然冷却模式', labelEn: 'Natural Cooling', desc: '冷却水→水盘管，压缩机关闭' },
-                        { key: 'mechanical', label: '机械制冷模式', labelEn: 'Mechanical Cooling', desc: '冷却水旁通→冷凝器，压缩机运行' },
-                        { key: 'hybrid', label: '混合模式', labelEn: 'Hybrid Mode', desc: '冷却水分流，压缩机部分负荷' },
-                    ].map(m => (
-                        <button
-                            key={m.key}
-                            onClick={() => setMode(m.key as typeof mode)}
-                            className="p-3 rounded-lg border text-left transition-all"
-                            style={{
-                                backgroundColor: mode === m.key ? COLORS.surface : COLORS.background,
-                                borderColor: mode === m.key ? COLORS.coolingWater : COLORS.border,
-                            }}
-                        >
-                            <div className="text-sm font-bold" style={{ color: mode === m.key ? COLORS.coolingWater : COLORS.text }}>{m.label}</div>
-                            <div className="text-xs" style={{ color: COLORS.textDim }}>{m.labelEn}</div>
-                            <div className="text-xs mt-1" style={{ color: COLORS.textMuted }}>{m.desc}</div>
-                        </button>
-                    ))}
+            <div className="mt-3 grid grid-cols-1 xl:grid-cols-[1.35fr_1fr] gap-3">
+                <div className="rounded-lg border p-3" style={{ backgroundColor: COLORS.surface, borderColor: COLORS.border }}>
+                    <div className="text-xs mb-2" style={{ color: COLORS.textMuted }}>运行模式切换</div>
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                        {[
+                            { key: 'auto', label: '自动模式', labelEn: 'Auto' },
+                            { key: 'natural', label: '自然冷却', labelEn: 'Natural' },
+                            { key: 'mechanical', label: '机械制冷', labelEn: 'Mechanical' },
+                            { key: 'hybrid', label: '混合模式', labelEn: 'Hybrid' },
+                        ].map(m => (
+                            <button
+                                key={m.key}
+                                onClick={() => setMode(m.key as typeof mode)}
+                                className="px-2 py-2 rounded-md border text-left transition-all"
+                                style={{
+                                    backgroundColor: mode === m.key ? COLORS.background : COLORS.surface,
+                                    borderColor: mode === m.key ? COLORS.coolingWater : COLORS.border,
+                                }}
+                            >
+                                <div className="text-xs font-bold" style={{ color: mode === m.key ? COLORS.coolingWater : COLORS.text }}>{m.label}</div>
+                                <div className="text-[10px]" style={{ color: COLORS.textDim }}>{m.labelEn}</div>
+                            </button>
+                        ))}
+                    </div>
                 </div>
 
-                {/* 控制滑块面板 Control Panel */}
-                <div className="md:w-1/3 p-4 rounded-lg border shadow-sm flex flex-col gap-4" style={{ backgroundColor: COLORS.surface, borderColor: COLORS.border }}>
-                    {/* 送风设定温度滑块 */}
-                    <div>
-                        <div className="flex justify-between items-end mb-1">
-                            <div>
-                                <div className="text-sm font-bold" style={{ color: COLORS.text }}>送风设定温度 (Supply Setpoint)</div>
-                            </div>
-                            <div className="text-xl font-bold font-mono" style={{ color: COLORS.airflow }}>
-                                {supplyTempSet.toFixed(1)}<span className="text-xs ml-1 text-gray-500">°C</span>
-                            </div>
-                        </div>
-                        <input
-                            type="range"
-                            min="15"
-                            max="30"
-                            step="0.5"
-                            value={supplyTempSet}
-                            onChange={(e) => setSupplyTempSet(Number(e.target.value))}
-                            className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cyan-400"
-                        />
-                        <div className="flex justify-between text-xs mt-0.5 text-gray-500 font-mono">
-                            <span>15</span>
-                            <span>22.5</span>
-                            <span>30</span>
+                <div className="rounded-lg border p-3" style={{ backgroundColor: COLORS.surface, borderColor: COLORS.border }}>
+                    <div className="flex items-center justify-between mb-2">
+                        <div className="text-xs" style={{ color: COLORS.textMuted }}>设定参数</div>
+                        <div className="flex items-center gap-2">
+                            <select
+                                value={exportFormat}
+                                onChange={(event) => setExportFormat(event.target.value as ExportFormat)}
+                                className="px-2 py-1 rounded-md border text-[11px] bg-transparent outline-none"
+                                style={{ borderColor: COLORS.border, color: COLORS.textMuted }}
+                            >
+                                <option value="json" style={{ backgroundColor: COLORS.surface }}>JSON</option>
+                                <option value="excel" style={{ backgroundColor: COLORS.surface }}>Excel (CSV)</option>
+                            </select>
+                            <button
+                                type="button"
+                                className="px-2 py-1 rounded-md border text-[11px]"
+                                style={{ borderColor: COLORS.border, color: COLORS.airflow, backgroundColor: COLORS.background }}
+                                onClick={exportCurrentParameters}
+                            >
+                                导出
+                            </button>
                         </div>
                     </div>
-                    {/* 热负荷滑块 */}
-                    <div>
-                        <div className="flex justify-between items-end mb-1">
-                            <div>
-                                <div className="text-sm font-bold" style={{ color: COLORS.text }}>机房热负荷 (IT Load)</div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                            <div className="flex items-center justify-between mb-1">
+                                <div className="text-xs font-semibold" style={{ color: COLORS.text }}>送风设定</div>
+                                <div className="text-sm font-bold font-mono" style={{ color: COLORS.airflow }}>
+                                    {supplyTempSet.toFixed(1)}<span className="text-[10px] ml-1 text-gray-500">°C</span>
+                                </div>
                             </div>
-                            <div className="text-xl font-bold font-mono" style={{ color: '#ef4444' }}>
-                                {heatLoad}<span className="text-xs ml-1 text-gray-500">kW</span>
-                            </div>
-                        </div>
-                        <input
-                            type="range"
-                            min="0"
-                            max="200"
-                            step="5"
-                            value={heatLoad}
-                            onChange={(e) => setHeatLoad(Number(e.target.value))}
-                            className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-red-500"
-                        />
-                        <div className="flex justify-between text-xs mt-0.5 text-gray-500 font-mono">
-                            <span>0</span>
-                            <span>100</span>
-                            <span>200</span>
-                        </div>
-                    </div>
-                    {/* 进水温度滑块 */}
-                    <div>
-                        <div className="flex justify-between items-end mb-1">
-                            <div>
-                                <div className="text-sm font-bold" style={{ color: COLORS.text }}>进水温度 (CW Inlet)</div>
-                            </div>
-                            <div className="text-xl font-bold font-mono" style={{ color: COLORS.coolingWater }}>
-                                {cwInletTemp}<span className="text-xs ml-1 text-gray-500">°C</span>
+                            <input
+                                type="range"
+                                min="15"
+                                max="30"
+                                step="0.5"
+                                value={supplyTempSet}
+                                onChange={(e) => setSupplyTempSet(Number(e.target.value))}
+                                className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+                            />
+                            <div className="flex justify-between text-[10px] mt-0.5 text-gray-500 font-mono">
+                                <span>15</span>
+                                <span>22.5</span>
+                                <span>30</span>
                             </div>
                         </div>
-                        <input
-                            type="range"
-                            min="5"
-                            max="40"
-                            step="0.5"
-                            value={cwInletTemp}
-                            onChange={(e) => setCwInletTemp(Number(e.target.value))}
-                            className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
-                        />
-                        <div className="flex justify-between text-xs mt-0.5 text-gray-500 font-mono">
-                            <span>5</span>
-                            <span>20</span>
-                            <span>40</span>
+
+                        <div>
+                            <div className="flex items-center justify-between mb-1">
+                                <div className="text-xs font-semibold" style={{ color: COLORS.text }}>机房热负荷</div>
+                                <div className="text-sm font-bold font-mono" style={{ color: '#ef4444' }}>
+                                    {heatLoad}<span className="text-[10px] ml-1 text-gray-500">kW</span>
+                                </div>
+                            </div>
+                            <input
+                                type="range"
+                                min="0"
+                                max="200"
+                                step="5"
+                                value={heatLoad}
+                                onChange={(e) => setHeatLoad(Number(e.target.value))}
+                                className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-red-500"
+                            />
+                            <div className="flex justify-between text-[10px] mt-0.5 text-gray-500 font-mono">
+                                <span>0</span>
+                                <span>100</span>
+                                <span>200</span>
+                            </div>
+                        </div>
+
+                        <div>
+                            <div className="flex items-center justify-between mb-1">
+                                <div className="text-xs font-semibold" style={{ color: COLORS.text }}>进水温度</div>
+                                <div className="text-sm font-bold font-mono" style={{ color: COLORS.coolingWater }}>
+                                    {cwInletTemp}<span className="text-[10px] ml-1 text-gray-500">°C</span>
+                                </div>
+                            </div>
+                            <input
+                                type="range"
+                                min="5"
+                                max="40"
+                                step="0.5"
+                                value={cwInletTemp}
+                                onChange={(e) => setCwInletTemp(Number(e.target.value))}
+                                className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                            />
+                            <div className="flex justify-between text-[10px] mt-0.5 text-gray-500 font-mono">
+                                <span>5</span>
+                                <span>20</span>
+                                <span>40</span>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1385,11 +1587,12 @@ export default function DualColdSourceAirWall() {
 
                 {renderCollapsibleSections()}
 
-                <div ref={trendChartRef}>
-                    <div className="text-xs mb-2" style={{ color: COLORS.textMuted }}>关键趋势图（近 60 点采样，点击上方数字可快速定位曲线）</div>
+                <div>
+                    <div className="text-xs mb-2" style={{ color: COLORS.textMuted }}>关键趋势图（近 60 点采样）</div>
                     {renderUnifiedTrendChart()}
                 </div>
             </div>
+            {renderSeriesModal()}
         </div >
     );
 }

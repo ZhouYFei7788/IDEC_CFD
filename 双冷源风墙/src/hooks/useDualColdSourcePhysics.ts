@@ -72,6 +72,7 @@ const heatExchangerEffectiveness = (cHot: number, cCold: number, ua: number) => 
 const MIN_FAN_RPM = 580;
 const MAX_FAN_RPM = 1450;
 const MIN_NATURAL_VALVE_OPENING = 5;
+const MECHANICAL_COIL_LEAK_FRACTION = 0.03;
 const COMPRESSOR_COUNT = 4;
 const COMP_SET_RPM = 3000;
 const COMP_MIN_RPM = 1200;
@@ -313,14 +314,21 @@ export const useDualColdSourcePhysics = (
                 }
             }
 
-            if (!runtime.emergencyActive && state.returnAirTemp >= EMERGENCY_TEMP_SETPOINT) {
+            if (
+                !runtime.emergencyActive &&
+                state.returnAirTemp >= EMERGENCY_TEMP_SETPOINT &&
+                state.supplyAirTemp > supplySet + 1
+            ) {
                 runtime.emergencyActive = true;
                 runtime.emergencyExitTimer = 0;
             }
             if (runtime.emergencyActive) {
-                if (state.returnAirTemp < EMERGENCY_TEMP_SETPOINT - 1) {
-                    runtime.emergencyExitTimer += dt;
-                    if (runtime.emergencyExitTimer >= 45) {
+                const emergencyReleaseTarget = Math.min(EMERGENCY_TEMP_SETPOINT - 1, supplySet + 4);
+                if (state.returnAirTemp < emergencyReleaseTarget) {
+                    const overcoolBias = state.supplyAirTemp < supplySet - 1 ? 1.8 : 1;
+                    const emergencyExitHold = state.supplyAirTemp < supplySet - 1 ? 15 : 30;
+                    runtime.emergencyExitTimer += dt * overcoolBias;
+                    if (runtime.emergencyExitTimer >= emergencyExitHold) {
                         runtime.emergencyActive = false;
                         runtime.emergencyExitTimer = 0;
                     }
@@ -437,14 +445,20 @@ export const useDualColdSourcePhysics = (
             state.bypassValveOpening = clamp(state.bypassValveOpening, 0, 100);
 
             const totalWaterMassFlow = 4 + 3 * loadRatio + 1.2 * (state.cfcDemand / 100);
-            const coilFlowFraction = naturalModeActive ? state.highPressureValveOpening / 100 : 0;
+            const valveFlowFraction = state.highPressureValveOpening / 100;
+            // Mechanical mode still keeps a small leakage flow through the coil branch.
+            const coilFlowFraction = clamp(
+                valveFlowFraction + (runtime.effectiveMode === 'mechanical' ? MECHANICAL_COIL_LEAK_FRACTION : 0),
+                0,
+                1
+            );
             const waterMassFlowCoil = Math.max(0.12, totalWaterMassFlow * coilFlowFraction);
             const waterCapacityRateCoil = waterMassFlowCoil * WATER_CP;
 
             let naturalCoolingCapacity = 0;
             let airAfterNatural = state.returnAirTemp;
 
-            if (naturalModeActive && state.returnAirTemp > effectiveCwIn + 0.3) {
+            if (coilFlowFraction > 0.001 && state.returnAirTemp > effectiveCwIn + 0.3) {
                 const uaCoil =
                     (NATURAL_COIL_UA_MIN + (NATURAL_COIL_UA_MAX - NATURAL_COIL_UA_MIN) * fanRatio)
                     * (0.15 + 0.85 * Math.sqrt(clamp(coilFlowFraction, 0, 1)));
