@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useDualColdSourcePhysics } from '../hooks/useDualColdSourcePhysics';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
@@ -41,6 +41,127 @@ const COLORS = {
     textMuted: '#94a3b8',
     textDim: '#64748b',
 };
+
+const uiClamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+type SeriesKey =
+    | 'supplyAirTemp'
+    | 'returnAirTemp'
+    | 'hotAisleTemp'
+    | 'coolingWaterIn'
+    | 'coolingWaterOut'
+    | 'cfcDemand'
+    | 'totalCooling'
+    | 'naturalCooling'
+    | 'dxCooling'
+    | 'highPressure'
+    | 'lowPressure'
+    | 'evapTemp'
+    | 'condTemp';
+
+type ChartPreset = 'air' | 'water' | 'capacity' | 'refrigerant' | 'custom';
+type SectionKey = 'air' | 'water' | 'capacity' | 'actuator' | 'runtime' | 'compressor';
+type AxisId = 'temp' | 'cooling' | 'pressure' | 'percent';
+
+const SERIES_META: Record<SeriesKey, { label: string; unit: string; color: string; axis: AxisId }> = {
+    supplyAirTemp: { label: '送风温度', unit: '°C', color: COLORS.airflow, axis: 'temp' },
+    returnAirTemp: { label: '回风温度', unit: '°C', color: COLORS.suction, axis: 'temp' },
+    hotAisleTemp: { label: '热通道温度', unit: '°C', color: '#ef4444', axis: 'temp' },
+    coolingWaterIn: { label: '进水温度', unit: '°C', color: COLORS.coolingWater, axis: 'temp' },
+    coolingWaterOut: { label: '出水温度', unit: '°C', color: COLORS.coolingWaterOut, axis: 'temp' },
+    cfcDemand: { label: 'CFC需求', unit: '%', color: '#f43f5e', axis: 'percent' },
+    totalCooling: { label: '总制冷量', unit: 'kW', color: '#22d3ee', axis: 'cooling' },
+    naturalCooling: { label: '自然冷却量', unit: 'kW', color: COLORS.coolingWater, axis: 'cooling' },
+    dxCooling: { label: 'DX制冷量', unit: 'kW', color: COLORS.lowPressure, axis: 'cooling' },
+    highPressure: { label: '高压', unit: 'Bar', color: COLORS.highPressure, axis: 'pressure' },
+    lowPressure: { label: '低压', unit: 'Bar', color: COLORS.lowPressure, axis: 'pressure' },
+    evapTemp: { label: '蒸发温度', unit: '°C', color: '#38bdf8', axis: 'temp' },
+    condTemp: { label: '冷凝温度', unit: '°C', color: '#fb923c', axis: 'temp' },
+};
+
+const ALL_SERIES = Object.keys(SERIES_META) as SeriesKey[];
+
+const PRESET_SERIES: Record<Exclude<ChartPreset, 'custom'>, SeriesKey[]> = {
+    air: ['supplyAirTemp', 'returnAirTemp', 'hotAisleTemp'],
+    water: ['coolingWaterIn', 'coolingWaterOut'],
+    capacity: ['totalCooling', 'naturalCooling', 'dxCooling', 'cfcDemand'],
+    refrigerant: ['highPressure', 'lowPressure', 'evapTemp', 'condTemp'],
+};
+
+const createSeriesSelection = (enabledKeys: SeriesKey[]) =>
+    ALL_SERIES.reduce((acc, key) => {
+        acc[key] = enabledKeys.includes(key);
+        return acc;
+    }, {} as Record<SeriesKey, boolean>);
+
+const RingGauge: React.FC<{ value: number; color: string }> = ({ value, color }) => {
+    const radius = 12;
+    const circumference = 2 * Math.PI * radius;
+    const normalizedValue = uiClamp(value, 0, 100);
+    const dashOffset = circumference * (1 - normalizedValue / 100);
+    return (
+        <svg width="30" height="30" viewBox="0 0 30 30">
+            <circle cx="15" cy="15" r={radius} fill="none" stroke={COLORS.border} strokeWidth="3" />
+            <motion.circle
+                cx="15"
+                cy="15"
+                r={radius}
+                fill="none"
+                stroke={color}
+                strokeWidth="3"
+                strokeLinecap="round"
+                strokeDasharray={circumference}
+                initial={false}
+                animate={{ strokeDashoffset: dashOffset }}
+                transform="rotate(-90 15 15)"
+                transition={{ duration: 0.4 }}
+            />
+        </svg>
+    );
+};
+
+const TempBarIcon: React.FC<{ value: number; color: string }> = ({ value, color }) => {
+    const fill = uiClamp((value - 10) / 30, 0.05, 1);
+    return (
+        <div className="w-4 h-8 rounded border relative overflow-hidden" style={{ borderColor: COLORS.border }}>
+            <motion.div
+                className="absolute bottom-0 left-0 right-0"
+                style={{ backgroundColor: color }}
+                initial={false}
+                animate={{ height: `${fill * 100}%`, opacity: [0.8, 1, 0.8] }}
+                transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+            />
+        </div>
+    );
+};
+
+const ModeFlowIcon: React.FC<{ mode: 'natural' | 'mechanical' | 'hybrid' }> = ({ mode }) => {
+    const activeIdx = mode === 'natural' ? 0 : mode === 'hybrid' ? 1 : 2;
+    return (
+        <div className="flex items-center gap-1.5">
+            {[0, 1, 2].map((idx) => (
+                <motion.span
+                    key={idx}
+                    className="w-2 h-2 rounded-full inline-block"
+                    style={{ backgroundColor: idx <= activeIdx ? COLORS.airflow : COLORS.border }}
+                    animate={idx === activeIdx ? { scale: [1, 1.25, 1] } : {}}
+                    transition={{ duration: 1.2, repeat: Infinity }}
+                />
+            ))}
+        </div>
+    );
+};
+
+const CoolingSpinIcon: React.FC<{ color: string }> = ({ color }) => (
+    <motion.div
+        className="text-sm font-bold"
+        style={{ color }}
+        animate={{ rotate: 360 }}
+        transition={{ duration: 3, repeat: Infinity, ease: 'linear' }}
+    >
+        ✦
+    </motion.div>
+);
 
 // --- 管路流动动画 Animated Pipeline ---
 const AnimatedPipe: React.FC<{
@@ -338,102 +459,471 @@ export default function DualColdSourceAirWall() {
         });
     }, [data.supplyAirTemp, data.returnAirTemp, data.hotAisleTemp, data.coolingWaterIn, data.coolingWaterOut, data.bypassValveOpening, data.highPressureValveOpening, data.fanSpeed, data.compHz, data.totalCooling, data.naturalCooling, data.dxCooling, data.cfcDemand, data.eev1Opening, data.highPressure, data.lowPressure, data.superheat, data.evapTemp, data.condTemp]);
 
-    const [activeChart, setActiveChart] = useState<string | null>(null);
+    const [expandedSections, setExpandedSections] = useState<Record<SectionKey, boolean>>({
+        air: true,
+        water: true,
+        capacity: true,
+        actuator: false,
+        runtime: false,
+        compressor: false,
+    });
+    const [selectedSeries, setSelectedSeries] = useState<Record<SeriesKey, boolean>>(
+        createSeriesSelection(['supplyAirTemp', 'returnAirTemp', 'coolingWaterIn', 'coolingWaterOut', 'cfcDemand'])
+    );
+    const [chartPreset, setChartPreset] = useState<ChartPreset>('custom');
+    const trendChartRef = useRef<HTMLDivElement | null>(null);
 
-    const renderChartModal = () => {
-        if (!activeChart) return null;
+    const toggleSection = (sectionKey: SectionKey) => {
+        setExpandedSections((prev) => ({ ...prev, [sectionKey]: !prev[sectionKey] }));
+    };
 
-        let dataKey = '';
-        let title = '';
-        let color = '';
-        let unit = '';
+    const toggleSeries = (seriesKey: SeriesKey) => {
+        setChartPreset('custom');
+        setSelectedSeries((prev) => ({ ...prev, [seriesKey]: !prev[seriesKey] }));
+    };
 
-        switch (activeChart) {
-            case 'supplyAirTemp': dataKey = 'supplyAirTemp'; title = '送风温度'; color = COLORS.airflow; unit = '°C'; break;
-            case 'returnAirTemp': dataKey = 'returnAirTemp'; title = '回风温度'; color = COLORS.suction; unit = '°C'; break;
-            case 'hotAisleTemp': dataKey = 'hotAisleTemp'; title = '热通道温度'; color = '#ef4444'; unit = '°C'; break;
-            case 'coolingWaterIn': dataKey = 'coolingWaterIn'; title = '进水温度'; color = COLORS.coolingWater; unit = '°C'; break;
-            case 'coolingWaterOut': dataKey = 'coolingWaterOut'; title = '出水温度'; color = COLORS.coolingWaterOut; unit = '°C'; break;
-            case 'bypassValveOpening': dataKey = 'bypassValveOpening'; title = '旁通阀开度'; color = COLORS.textDim; unit = '%'; break;
-            case 'highPressureValveOpening': dataKey = 'highPressureValveOpening'; title = '二通阀开度'; color = COLORS.coolingWaterHot; unit = '%'; break;
-            case 'fanSpeed': dataKey = 'fanSpeed'; title = '风机转速'; color = '#a78bfa'; unit = 'RPM'; break;
-            case 'compHz': dataKey = 'compHz'; title = '压缩机频率'; color = COLORS.highPressure; unit = 'Hz'; break;
-            case 'totalCooling': dataKey = 'totalCooling'; title = '总制冷量'; color = '#22d3ee'; unit = 'kW'; break;
-            case 'naturalCooling': dataKey = 'naturalCooling'; title = '自然冷却量'; color = COLORS.coolingWater; unit = 'kW'; break;
-            case 'dxCooling': dataKey = 'dxCooling'; title = 'DX制冷量'; color = COLORS.lowPressure; unit = 'kW'; break;
-            case 'cfcDemand': dataKey = 'cfcDemand'; title = 'CFC制冷需求'; color = '#f43f5e'; unit = '%'; break;
-            case 'eevOpening': dataKey = 'eevOpening'; title = 'EEV开度'; color = '#facc15'; unit = '%'; break;
-            case 'highPressure': dataKey = 'highPressure'; title = '高压压力'; color = COLORS.highPressure; unit = 'Bar'; break;
-            case 'lowPressure': dataKey = 'lowPressure'; title = '低压压力'; color = COLORS.lowPressure; unit = 'Bar'; break;
-            case 'superheat': dataKey = 'superheat'; title = '过热度'; color = '#f87171'; unit = 'K'; break;
-            case 'evapTemp': dataKey = 'evapTemp'; title = '蒸发温度'; color = '#38bdf8'; unit = '°C'; break;
-            case 'condTemp': dataKey = 'condTemp'; title = '冷凝温度'; color = '#fb923c'; unit = '°C'; break;
-            default: return null;
-        }
+    const focusSeries = (seriesKey: SeriesKey) => {
+        setChartPreset('custom');
+        setSelectedSeries(createSeriesSelection([seriesKey]));
+        window.requestAnimationFrame(() => {
+            trendChartRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+    };
 
-        const values = history.map(d => d[dataKey as keyof typeof d] as number).filter(v => v !== undefined && !isNaN(v));
-        const max = values.length > 0 ? Math.max(...values).toFixed(2) : '-';
-        const min = values.length > 0 ? Math.min(...values).toFixed(2) : '-';
-        const avg = values.length > 0 ? (values.reduce((a, b) => a + b, 0) / values.length).toFixed(2) : '-';
+    const applyPreset = (preset: Exclude<ChartPreset, 'custom'>) => {
+        setChartPreset(preset);
+        setSelectedSeries(createSeriesSelection(PRESET_SERIES[preset]));
+    };
 
-        return (
-            <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4" onClick={() => setActiveChart(null)}>
-                {/* 模糊背景层 (独立避免影响内部内容) */}
-                <div className="absolute inset-0 bg-black/60 backdrop-blur-sm pointer-events-none"></div>
+    const renderMetricCard = (
+        label: string,
+        value: string,
+        unit: string,
+        color: string,
+        seriesKey?: SeriesKey
+    ) => (
+        <button
+            type="button"
+            className="relative text-left rounded-md border px-3 py-2 transition-colors"
+            style={{
+                backgroundColor: COLORS.background,
+                borderColor: COLORS.border,
+                cursor: seriesKey ? 'pointer' : 'default',
+            }}
+            onClick={seriesKey ? () => focusSeries(seriesKey) : undefined}
+        >
+            <span className="absolute left-0 top-0 h-full w-[2px] rounded-l-md" style={{ backgroundColor: color }} />
+            <div className="text-[11px]" style={{ color: COLORS.textDim }}>{label}</div>
+            <div className="mt-1 flex items-baseline gap-1">
+                <span className="text-xl font-black font-mono" style={{ color }}>{value}</span>
+                <span className="text-xs text-gray-500">{unit}</span>
+            </div>
+            {seriesKey && (
+                <div className="mt-1 text-[10px]" style={{ color: selectedSeries[seriesKey] ? color : COLORS.textDim }}>
+                    {selectedSeries[seriesKey] && activeSeries.length === 1 ? '当前正在查看' : '点击查看趋势'}
+                </div>
+            )}
+        </button>
+    );
 
-                {/* 弹窗内容 */}
-                <div className="relative bg-slate-800 rounded-xl p-6 w-full max-w-3xl border border-slate-700 shadow-2xl" onClick={e => e.stopPropagation()}>
-                    <div className="flex justify-between items-start mb-6 border-b border-slate-700 pb-3">
-                        <div>
-                            <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                                <div className="w-3 h-3 rounded-full" style={{ backgroundColor: color }}></div>
-                                {title} 实时监测曲线
-                            </h3>
-                            <div className="flex gap-4 mt-3 text-sm">
-                                <div className="flex flex-col bg-slate-900 px-3 py-1.5 rounded border border-slate-700">
-                                    <span className="text-slate-400 text-xs">最大值 (Max)</span>
-                                    <span className="text-white font-mono font-bold" style={{ color: color }}>{max} {unit}</span>
-                                </div>
-                                <div className="flex flex-col bg-slate-900 px-3 py-1.5 rounded border border-slate-700">
-                                    <span className="text-slate-400 text-xs">最小值 (Min)</span>
-                                    <span className="text-white font-mono font-bold" style={{ color: color }}>{min} {unit}</span>
-                                </div>
-                                <div className="flex flex-col bg-slate-900 px-3 py-1.5 rounded border border-slate-700">
-                                    <span className="text-slate-400 text-xs">平均值 (Avg)</span>
-                                    <span className="text-white font-mono font-bold" style={{ color: color }}>{avg} {unit}</span>
-                                </div>
-                            </div>
+    const renderSection = (
+        sectionKey: SectionKey,
+        title: string,
+        summary: string,
+        color: string,
+        content: React.ReactNode
+    ) => (
+        <div className="rounded-lg border p-3" style={{ borderColor: COLORS.border, backgroundColor: COLORS.surface }}>
+            <button
+                type="button"
+                className="w-full flex items-center justify-between gap-3 text-left"
+                onClick={() => toggleSection(sectionKey)}
+            >
+                <div className="flex items-center gap-2 min-w-0">
+                    <span className="h-4 w-[2px] rounded" style={{ backgroundColor: color }} />
+                    <span className="text-sm font-bold" style={{ color: COLORS.text }}>{title}</span>
+                </div>
+                <div className="flex items-center gap-3 min-w-0">
+                    <span className="text-xs truncate" style={{ color: COLORS.textMuted }}>{summary}</span>
+                    <span className="text-sm" style={{ color: COLORS.textDim }}>{expandedSections[sectionKey] ? '▾' : '▸'}</span>
+                </div>
+            </button>
+            {expandedSections[sectionKey] && (
+                <div className="mt-3 pt-3 border-t" style={{ borderColor: COLORS.border }}>
+                    {content}
+                </div>
+            )}
+        </div>
+    );
+
+    const activeSeries = ALL_SERIES.filter((seriesKey) => selectedSeries[seriesKey]);
+    const axisUsage = activeSeries.reduce((acc, seriesKey) => {
+        acc[SERIES_META[seriesKey].axis] = true;
+        return acc;
+    }, { temp: false, cooling: false, pressure: false, percent: false } as Record<AxisId, boolean>);
+    const rightAxisFamilies = (['percent', 'pressure', 'cooling'] as AxisId[]).filter((axis) => axisUsage[axis]);
+    const primaryRightAxis = axisUsage.percent ? 'percent' : axisUsage.pressure ? 'pressure' : axisUsage.cooling ? 'cooling' : null;
+    const modeLabel = data.effectiveMode === 'natural' ? '自然冷却' : data.effectiveMode === 'hybrid' ? '混合模式' : '机械制冷';
+    const modeColor = data.effectiveMode === 'natural' ? COLORS.coolingWater : data.effectiveMode === 'hybrid' ? '#f59e0b' : COLORS.highPressure;
+    const cfcColor = data.cfcDemand >= 75 ? '#f43f5e' : data.cfcDemand >= 45 ? '#f59e0b' : '#22c55e';
+
+    const renderValveRow = (label: string, value: number, color: string) => (
+        <div className="rounded-md border px-3 py-2" style={{ borderColor: COLORS.border, backgroundColor: COLORS.background }}>
+            <div className="flex items-center justify-between text-xs mb-1.5">
+                <span style={{ color: COLORS.textMuted }}>{label}</span>
+                <span className="font-mono" style={{ color }}>{value.toFixed(2)}%</span>
+            </div>
+            <div className="h-1.5 rounded overflow-hidden" style={{ backgroundColor: COLORS.border }}>
+                <motion.div
+                    className="h-full"
+                    style={{ backgroundColor: color }}
+                    initial={false}
+                    animate={{ width: `${uiClamp(value, 0, 100)}%` }}
+                    transition={{ duration: 0.35 }}
+                />
+            </div>
+        </div>
+    );
+
+    const renderKpiStrip = () => (
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
+            <button
+                type="button"
+                className="rounded-md border px-3 py-2 text-left"
+                style={{ backgroundColor: COLORS.background, borderColor: COLORS.border }}
+                onClick={() => focusSeries('supplyAirTemp')}
+            >
+                <div className="flex items-center justify-between">
+                    <span className="text-xs" style={{ color: COLORS.textDim }}>送风温度</span>
+                    <TempBarIcon value={data.supplyAirTemp} color={COLORS.airflow} />
+                </div>
+                <div className="mt-1 flex items-baseline gap-1">
+                    <span className="text-2xl font-black font-mono" style={{ color: COLORS.airflow }}>{data.supplyAirTemp.toFixed(1)}</span>
+                    <span className="text-xs text-gray-500">°C</span>
+                </div>
+                <div className="mt-1 text-[10px]" style={{ color: selectedSeries.supplyAirTemp ? COLORS.airflow : COLORS.textDim }}>
+                    {selectedSeries.supplyAirTemp && activeSeries.length === 1 ? '当前正在查看' : '点击查看趋势'}
+                </div>
+            </button>
+
+            <button
+                type="button"
+                className="rounded-md border px-3 py-2 text-left"
+                style={{ backgroundColor: COLORS.background, borderColor: COLORS.border }}
+                onClick={() => focusSeries('returnAirTemp')}
+            >
+                <div className="flex items-center justify-between">
+                    <span className="text-xs" style={{ color: COLORS.textDim }}>回风温度</span>
+                    <TempBarIcon value={data.returnAirTemp} color={COLORS.suction} />
+                </div>
+                <div className="mt-1 flex items-baseline gap-1">
+                    <span className="text-2xl font-black font-mono" style={{ color: COLORS.suction }}>{data.returnAirTemp.toFixed(1)}</span>
+                    <span className="text-xs text-gray-500">°C</span>
+                </div>
+                <div className="mt-1 text-[10px]" style={{ color: selectedSeries.returnAirTemp ? COLORS.suction : COLORS.textDim }}>
+                    {selectedSeries.returnAirTemp && activeSeries.length === 1 ? '当前正在查看' : '点击查看趋势'}
+                </div>
+            </button>
+
+            <button
+                type="button"
+                className="rounded-md border px-3 py-2 text-left"
+                style={{ backgroundColor: COLORS.background, borderColor: COLORS.border }}
+                onClick={() => focusSeries('cfcDemand')}
+            >
+                <div className="flex items-center justify-between">
+                    <span className="text-xs" style={{ color: COLORS.textDim }}>CFC需求</span>
+                    <RingGauge value={data.cfcDemand} color={cfcColor} />
+                </div>
+                <div className="mt-1 flex items-baseline gap-1">
+                    <span className="text-2xl font-black font-mono" style={{ color: cfcColor }}>{data.cfcDemand.toFixed(0)}</span>
+                    <span className="text-xs text-gray-500">%</span>
+                </div>
+                <div className="mt-1 text-[10px]" style={{ color: selectedSeries.cfcDemand ? cfcColor : COLORS.textDim }}>
+                    {selectedSeries.cfcDemand && activeSeries.length === 1 ? '当前正在查看' : '点击查看趋势'}
+                </div>
+            </button>
+
+            <div className="rounded-md border px-3 py-2 text-left" style={{ backgroundColor: COLORS.background, borderColor: COLORS.border }}>
+                <div className="flex items-center justify-between">
+                    <span className="text-xs" style={{ color: COLORS.textDim }}>有效模式</span>
+                    <ModeFlowIcon mode={data.effectiveMode} />
+                </div>
+                <div className="mt-2 text-lg font-black" style={{ color: modeColor }}>{modeLabel}</div>
+                <div className="mt-1 text-[10px]" style={{ color: COLORS.textDim }}>
+                    压缩机 {data.activeCompressors}/4
+                </div>
+            </div>
+
+            <button
+                type="button"
+                className="rounded-md border px-3 py-2 text-left"
+                style={{ backgroundColor: COLORS.background, borderColor: COLORS.border }}
+                onClick={() => focusSeries('totalCooling')}
+            >
+                <div className="flex items-center justify-between">
+                    <span className="text-xs" style={{ color: COLORS.textDim }}>总制冷量</span>
+                    <CoolingSpinIcon color="#22d3ee" />
+                </div>
+                <div className="mt-1 flex items-baseline gap-1">
+                    <span className="text-2xl font-black font-mono" style={{ color: '#22d3ee' }}>{data.totalCooling.toFixed(1)}</span>
+                    <span className="text-xs text-gray-500">kW</span>
+                </div>
+                <div className="mt-1 text-[10px]" style={{ color: selectedSeries.totalCooling ? '#22d3ee' : COLORS.textDim }}>
+                    {selectedSeries.totalCooling && activeSeries.length === 1 ? '当前正在查看' : '点击查看趋势'}
+                </div>
+            </button>
+        </div>
+    );
+
+    const renderCollapsibleSections = () => (
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+            {renderSection(
+                'air',
+                '空气侧参数',
+                `送风 ${data.supplyAirTemp.toFixed(1)}°C · 回风 ${data.returnAirTemp.toFixed(1)}°C`,
+                COLORS.airflow,
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    {renderMetricCard('送风温度', data.supplyAirTemp.toFixed(1), '°C', COLORS.airflow, 'supplyAirTemp')}
+                    {renderMetricCard('回风温度', data.returnAirTemp.toFixed(1), '°C', COLORS.suction, 'returnAirTemp')}
+                    {renderMetricCard('热通道温度', data.hotAisleTemp.toFixed(1), '°C', '#ef4444', 'hotAisleTemp')}
+                </div>
+            )}
+
+            {renderSection(
+                'water',
+                '水侧参数',
+                `进水 ${data.coolingWaterIn.toFixed(1)}°C · 出水 ${data.coolingWaterOut.toFixed(1)}°C`,
+                COLORS.coolingWater,
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {renderMetricCard('进水温度', data.coolingWaterIn.toFixed(1), '°C', COLORS.coolingWater, 'coolingWaterIn')}
+                    {renderMetricCard('出水温度', data.coolingWaterOut.toFixed(1), '°C', COLORS.coolingWaterOut, 'coolingWaterOut')}
+                </div>
+            )}
+
+            {renderSection(
+                'capacity',
+                '冷却能力',
+                `总冷量 ${data.totalCooling.toFixed(1)} kW · CFC ${data.cfcDemand.toFixed(0)}%`,
+                '#22d3ee',
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    {renderMetricCard('总制冷量', data.totalCooling.toFixed(1), 'kW', '#22d3ee', 'totalCooling')}
+                    {renderMetricCard('自然冷却量', data.naturalCooling.toFixed(1), 'kW', COLORS.coolingWater, 'naturalCooling')}
+                    {renderMetricCard('DX制冷量', data.dxCooling.toFixed(1), 'kW', COLORS.lowPressure, 'dxCooling')}
+                    {renderMetricCard('CFC需求', data.cfcDemand.toFixed(0), '%', cfcColor, 'cfcDemand')}
+                </div>
+            )}
+
+            {renderSection(
+                'actuator',
+                '执行器',
+                `二通阀 ${data.highPressureValveOpening.toFixed(1)}% · 旁通阀 ${data.bypassValveOpening.toFixed(1)}%`,
+                '#94a3b8',
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {renderValveRow('旁通阀门开度', data.bypassValveOpening, COLORS.coolingWater)}
+                    {renderValveRow('二通阀门开度', data.highPressureValveOpening, COLORS.coolingWaterHot)}
+                </div>
+            )}
+
+            {renderSection(
+                'runtime',
+                '运行状态',
+                `风机 ${data.fanSpeed.toFixed(0)} RPM · 频率 ${data.compHz.toFixed(1)} Hz`,
+                '#a78bfa',
+                <div className="space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="rounded-md border px-3 py-2" style={{ borderColor: COLORS.border, backgroundColor: COLORS.background }}>
+                            <div className="text-xs" style={{ color: COLORS.textDim }}>风机转速</div>
+                            <div className="mt-1 text-xl font-black font-mono" style={{ color: '#a78bfa' }}>{data.fanSpeed.toFixed(0)} <span className="text-xs text-gray-500">RPM</span></div>
                         </div>
-                        <button onClick={() => setActiveChart(null)} className="text-gray-400 hover:text-white bg-slate-700 hover:bg-slate-600 rounded-full w-8 h-8 flex items-center justify-center transition-colors">✕</button>
+                        <div className="rounded-md border px-3 py-2" style={{ borderColor: COLORS.border, backgroundColor: COLORS.background }}>
+                            <div className="text-xs" style={{ color: COLORS.textDim }}>压缩机频率</div>
+                            <div className="mt-1 text-xl font-black font-mono" style={{ color: COLORS.highPressure }}>{data.compHz.toFixed(1)} <span className="text-xs text-gray-500">Hz</span></div>
+                        </div>
+                        <div className="rounded-md border px-3 py-2" style={{ borderColor: COLORS.border, backgroundColor: COLORS.background }}>
+                            <div className="text-xs" style={{ color: COLORS.textDim }}>压缩机台数</div>
+                            <div className="mt-1 text-xl font-black font-mono" style={{ color: COLORS.coolingWater }}>{data.activeCompressors}<span className="text-xs text-gray-500">/4</span></div>
+                        </div>
                     </div>
-                    <div className="h-72 w-full">
-                        <ResponsiveContainer width="100%" height="100%">
-                            <LineChart data={history} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-                                <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
-                                <XAxis dataKey="time" stroke="#94a3b8" fontSize={12} tickMargin={10} minTickGap={20} />
-                                <YAxis stroke="#94a3b8" fontSize={12} domain={['dataMin - 1', 'dataMax + 1']} tickFormatter={(val) => Number(val).toFixed(1)} width={40} />
-                                <Tooltip
-                                    contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155', color: '#f8fafc', borderRadius: '8px' }}
-                                    itemStyle={{ color: color, fontWeight: 'bold' }}
-                                    labelStyle={{ color: '#94a3b8', marginBottom: '4px' }}
-                                />
-                                <Line
-                                    type="monotone"
-                                    dataKey={dataKey}
-                                    name={`${title} (${unit})`}
-                                    stroke={color}
-                                    strokeWidth={3}
-                                    dot={{ r: 0, fill: color, strokeWidth: 0 }}
-                                    activeDot={{ r: 6, fill: color, stroke: '#fff', strokeWidth: 2 }}
-                                    isAnimationActive={false}
-                                />
-                            </LineChart>
-                        </ResponsiveContainer>
+                    <div className="flex flex-wrap gap-2">
+                        {[
+                            { label: '低负载', active: data.lowLoadMode, color: '#facc15' },
+                            { label: '除湿', active: data.dehumidifying, color: '#38bdf8' },
+                            { label: '应急制冷', active: data.emergencyCooling, color: '#ef4444' }
+                        ].map((badge) => (
+                            <span
+                                key={badge.label}
+                                className="px-2 py-1 rounded border text-xs"
+                                style={{
+                                    color: badge.active ? badge.color : COLORS.textDim,
+                                    borderColor: badge.active ? badge.color : COLORS.border,
+                                    backgroundColor: COLORS.background
+                                }}
+                            >
+                                {badge.label}: {badge.active ? 'ON' : 'OFF'}
+                            </span>
+                        ))}
                     </div>
                 </div>
+            )}
+
+            {renderSection(
+                'compressor',
+                '压缩机参数',
+                `高压 ${data.highPressure.toFixed(1)} Bar · 低压 ${data.lowPressure.toFixed(1)} Bar`,
+                '#f59e0b',
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    <div className="rounded-md border px-3 py-2" style={{ borderColor: COLORS.border, backgroundColor: COLORS.background }}>
+                        <div className="text-xs" style={{ color: COLORS.textDim }}>EEV开度</div>
+                        <div className="mt-1 text-xl font-black font-mono" style={{ color: '#facc15' }}>{data.eev1Opening.toFixed(1)} <span className="text-xs text-gray-500">%</span></div>
+                    </div>
+                    {renderMetricCard('高压', data.highPressure.toFixed(1), 'Bar', COLORS.highPressure, 'highPressure')}
+                    {renderMetricCard('低压', data.lowPressure.toFixed(1), 'Bar', COLORS.lowPressure, 'lowPressure')}
+                    {renderMetricCard('蒸发温度', data.evapTemp.toFixed(1), '°C', '#38bdf8', 'evapTemp')}
+                    {renderMetricCard('冷凝温度', data.condTemp.toFixed(1), '°C', '#fb923c', 'condTemp')}
+                    <div className="rounded-md border px-3 py-2" style={{ borderColor: COLORS.border, backgroundColor: COLORS.background }}>
+                        <div className="text-xs" style={{ color: COLORS.textDim }}>过热度</div>
+                        <div className="mt-1 text-xl font-black font-mono" style={{ color: '#f87171' }}>{data.superheat.toFixed(1)} <span className="text-xs text-gray-500">K</span></div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+
+    const renderChartTooltip = ({ active, payload, label }: any) => {
+        if (!active || !payload || payload.length === 0) {
+            return null;
+        }
+
+        return (
+            <div className="rounded-md border px-3 py-2 text-xs shadow-lg" style={{ backgroundColor: COLORS.surface, borderColor: COLORS.border }}>
+                <div className="mb-1 font-semibold" style={{ color: COLORS.text }}>{label}</div>
+                {payload.map((item: any) => {
+                    const dataKey = item?.dataKey as SeriesKey | undefined;
+                    if (!dataKey || !SERIES_META[dataKey]) {
+                        return null;
+                    }
+                    return (
+                        <div key={dataKey} className="flex items-center justify-between gap-4">
+                            <span style={{ color: item.color }}>{SERIES_META[dataKey].label}</span>
+                            <span className="font-mono" style={{ color: COLORS.text }}>
+                                {Number(item.value).toFixed(1)} {SERIES_META[dataKey].unit}
+                            </span>
+                        </div>
+                    );
+                })}
             </div>
         );
     };
+
+    const renderUnifiedTrendChart = () => (
+        <div className="rounded-lg border p-3" style={{ backgroundColor: COLORS.surface, borderColor: COLORS.border }}>
+            <div className="flex flex-col gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                    {[
+                        { key: 'air', label: '空气' },
+                        { key: 'water', label: '水侧' },
+                        { key: 'capacity', label: '冷量' },
+                        { key: 'refrigerant', label: '制冷剂' },
+                    ].map((preset) => (
+                        <button
+                            key={preset.key}
+                            type="button"
+                            className="px-2.5 py-1 rounded-md border text-xs transition-colors"
+                            style={{
+                                borderColor: chartPreset === preset.key ? COLORS.airflow : COLORS.border,
+                                color: chartPreset === preset.key ? COLORS.airflow : COLORS.textMuted,
+                                backgroundColor: COLORS.background
+                            }}
+                            onClick={() => applyPreset(preset.key as Exclude<ChartPreset, 'custom'>)}
+                        >
+                            {preset.label}
+                        </button>
+                    ))}
+                    <span className="text-xs ml-1" style={{ color: COLORS.textDim }}>
+                        当前预设: {chartPreset === 'custom' ? '自定义' : chartPreset === 'air' ? '空气' : chartPreset === 'water' ? '水侧' : chartPreset === 'capacity' ? '冷量' : '制冷剂'}
+                    </span>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                    {ALL_SERIES.map((seriesKey) => (
+                        <button
+                            key={seriesKey}
+                            type="button"
+                            className="px-2.5 py-1 rounded-md border text-xs transition-colors"
+                            style={{
+                                borderColor: selectedSeries[seriesKey] ? SERIES_META[seriesKey].color : COLORS.border,
+                                color: selectedSeries[seriesKey] ? SERIES_META[seriesKey].color : COLORS.textDim,
+                                backgroundColor: COLORS.background
+                            }}
+                            onClick={() => toggleSeries(seriesKey)}
+                        >
+                            {SERIES_META[seriesKey].label}
+                        </button>
+                    ))}
+                </div>
+
+                {rightAxisFamilies.length > 1 && (
+                    <div className="text-[11px]" style={{ color: '#f59e0b' }}>
+                        当前自定义选择含多种非温度单位，右轴仅显示主单位，请优先使用分组预设避免误读。
+                    </div>
+                )}
+
+                <div className="h-[320px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={history}>
+                            <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} opacity={0.35} />
+                            <XAxis dataKey="time" stroke={COLORS.textDim} tick={{ fill: COLORS.textDim, fontSize: 11 }} minTickGap={28} />
+                            <YAxis
+                                yAxisId="temp"
+                                stroke={COLORS.textMuted}
+                                tick={{ fill: COLORS.textDim, fontSize: 11 }}
+                                hide={!axisUsage.temp}
+                                domain={[(min: number) => Math.floor(min - 2), (max: number) => Math.ceil(max + 2)]}
+                            />
+                            <YAxis
+                                yAxisId="cooling"
+                                orientation="right"
+                                stroke="#22d3ee"
+                                tick={{ fill: '#22d3ee', fontSize: 11 }}
+                                hide={primaryRightAxis !== 'cooling'}
+                                domain={[0, (max: number) => Math.max(20, Math.ceil(max * 1.15))]}
+                            />
+                            <YAxis
+                                yAxisId="pressure"
+                                orientation="right"
+                                stroke={COLORS.highPressure}
+                                tick={{ fill: COLORS.highPressure, fontSize: 11 }}
+                                hide={primaryRightAxis !== 'pressure'}
+                                domain={[(min: number) => Math.floor(min - 1), (max: number) => Math.ceil(max + 1)]}
+                            />
+                            <YAxis
+                                yAxisId="percent"
+                                orientation="right"
+                                stroke="#f43f5e"
+                                tick={{ fill: '#f43f5e', fontSize: 11 }}
+                                hide={primaryRightAxis !== 'percent'}
+                                domain={[0, 100]}
+                            />
+                            <Tooltip content={renderChartTooltip} />
+                            {activeSeries.map((seriesKey) => (
+                                <Line
+                                    key={seriesKey}
+                                    type="monotone"
+                                    dataKey={seriesKey}
+                                    yAxisId={SERIES_META[seriesKey].axis}
+                                    stroke={SERIES_META[seriesKey].color}
+                                    strokeWidth={2}
+                                    dot={false}
+                                    isAnimationActive={false}
+                                />
+                            ))}
+                        </LineChart>
+                    </ResponsiveContainer>
+                </div>
+            </div>
+        </div>
+    );
 
     return (
         <div className="min-h-screen w-full p-4" style={{ backgroundColor: COLORS.background }}>
@@ -761,7 +1251,7 @@ export default function DualColdSourceAirWall() {
             {/* 运行模式和热负荷拉杆 Operating Mode & Heat Load */}
             <div className="mt-3 flex flex-col md:flex-row gap-4">
                 {/* 模式选择 */}
-                <div className="flex-1 flex gap-3">
+                <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
                     {[
                         { key: 'auto', label: '自动模式', labelEn: 'Auto Mode', desc: '自动计算CFC需求并调度自然/混合/机械' },
                         { key: 'natural', label: '自然冷却模式', labelEn: 'Natural Cooling', desc: '冷却水→水盘管，压缩机关闭' },
@@ -771,7 +1261,7 @@ export default function DualColdSourceAirWall() {
                         <button
                             key={m.key}
                             onClick={() => setMode(m.key as typeof mode)}
-                            className="flex-1 p-3 rounded-lg border text-left transition-all"
+                            className="p-3 rounded-lg border text-left transition-all"
                             style={{
                                 backgroundColor: mode === m.key ? COLORS.surface : COLORS.background,
                                 borderColor: mode === m.key ? COLORS.coolingWater : COLORS.border,
@@ -864,269 +1354,42 @@ export default function DualColdSourceAirWall() {
                 </div>
             </div>
 
-            {/* 状态栏 Dashboard (Modern SCADA Redesign) */}
-            <div className="mt-5 bg-opacity-50 rounded-xl border p-4 shadow-lg backdrop-blur-sm" style={{ backgroundColor: COLORS.surface, borderColor: COLORS.border }}>
-                <div className="flex items-center gap-2 mb-4">
-                    <div className="w-1.5 h-4 bg-blue-500 rounded-full" />
+            {/* 系统实时监测 Telemetry */}
+            <div className="mt-5 rounded-xl border p-4 space-y-4" style={{ backgroundColor: COLORS.surface, borderColor: COLORS.border }}>
+                <div className="flex items-center gap-2">
+                    <div className="w-1.5 h-4 rounded-full" style={{ backgroundColor: COLORS.airflow }} />
                     <h2 className="text-sm font-bold uppercase tracking-wider" style={{ color: COLORS.text }}>系统实时监测 (Real-time Telemetry)</h2>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                    {/* 空气侧 Air Side */}
-                    <div className="space-y-3 lg:col-span-2">
-                        <div className="text-xs uppercase tracking-wider font-semibold border-b pb-1" style={{ color: COLORS.airflow, borderColor: COLORS.border }}>空气侧参数 Air Side</div>
-                        <div className="grid grid-cols-3 gap-3">
-                            <div className="relative z-50 p-3 rounded flex flex-col justify-between cursor-pointer hover:brightness-125 transition-all border-l-2 pointer-events-auto group"
-                                style={{ backgroundColor: COLORS.background, borderColor: COLORS.airflow }}
-                                onClick={() => setActiveChart('supplyAirTemp')}>
-                                <span className="text-xs" style={{ color: COLORS.textDim }}>送风温度</span>
-                                <div className="flex items-baseline gap-1 mt-1">
-                                    <span className="text-2xl font-black font-mono group-hover:underline decoration-2 underline-offset-4" style={{ color: COLORS.airflow }}>{data.supplyAirTemp.toFixed(1)}</span>
-                                    <span className="text-xs text-gray-500">°C</span>
-                                </div>
-                            </div>
-                            <div className="relative z-50 p-3 rounded flex flex-col justify-between cursor-pointer hover:brightness-125 transition-all border-l-2 pointer-events-auto group"
-                                style={{ backgroundColor: COLORS.background, borderColor: COLORS.suction }}
-                                onClick={() => setActiveChart('returnAirTemp')}>
-                                <span className="text-xs" style={{ color: COLORS.textDim }}>回风温度</span>
-                                <div className="flex items-baseline gap-1 mt-1">
-                                    <span className="text-2xl font-black font-mono group-hover:underline decoration-2 underline-offset-4" style={{ color: COLORS.suction }}>{data.returnAirTemp.toFixed(1)}</span>
-                                    <span className="text-xs text-gray-500">°C</span>
-                                </div>
-                            </div>
-                            <div className="relative z-50 p-3 rounded flex flex-col justify-between cursor-pointer hover:brightness-125 transition-all border-l-2 pointer-events-auto group"
-                                style={{ backgroundColor: COLORS.background, borderColor: '#ef4444' }}
-                                onClick={() => setActiveChart('hotAisleTemp')}>
-                                <span className="text-xs" style={{ color: COLORS.textDim }}>热通道温度</span>
-                                <div className="flex items-baseline gap-1 mt-1">
-                                    <span className="text-2xl font-black font-mono group-hover:underline decoration-2 underline-offset-4" style={{ color: '#ef4444' }}>{data.hotAisleTemp.toFixed(1)}</span>
-                                    <span className="text-xs text-gray-500">°C</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+                {renderKpiStrip()}
 
-                    {/* 水侧 Water Side */}
-                    <div className="space-y-3">
-                        <div className="text-xs uppercase tracking-wider font-semibold border-b pb-1" style={{ color: COLORS.coolingWater, borderColor: COLORS.border }}>水侧参数 Water Side</div>
-                        <div className="grid grid-cols-2 gap-3">
-                            <div className="relative z-50 p-3 rounded flex flex-col justify-between cursor-pointer hover:brightness-125 transition-all border-l-2 pointer-events-auto group"
-                                style={{ backgroundColor: COLORS.background, borderColor: COLORS.coolingWater }}
-                                onClick={() => setActiveChart('coolingWaterIn')}>
-                                <span className="text-xs" style={{ color: COLORS.textDim }}>进水温度</span>
-                                <div className="flex items-baseline gap-1 mt-1">
-                                    <span className="text-2xl font-black font-mono group-hover:underline decoration-2 underline-offset-4" style={{ color: COLORS.coolingWater }}>{data.coolingWaterIn.toFixed(1)}</span>
-                                    <span className="text-xs text-gray-500">°C</span>
-                                </div>
-                            </div>
-                            <div className="relative z-50 p-3 rounded flex flex-col justify-between cursor-pointer hover:brightness-125 transition-all border-l-2 pointer-events-auto group"
-                                style={{ backgroundColor: COLORS.background, borderColor: COLORS.coolingWaterOut }}
-                                onClick={() => setActiveChart('coolingWaterOut')}>
-                                <span className="text-xs" style={{ color: COLORS.textDim }}>出水温度</span>
-                                <div className="flex items-baseline gap-1 mt-1">
-                                    <span className="text-2xl font-black font-mono group-hover:underline decoration-2 underline-offset-4" style={{ color: COLORS.coolingWaterOut }}>{data.coolingWaterOut.toFixed(1)}</span>
-                                    <span className="text-xs text-gray-500">°C</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* 执行机构 Actuators */}
-                    <div className="space-y-3">
-                        <div className="text-xs uppercase tracking-wider font-semibold border-b pb-1" style={{ color: COLORS.equipment, borderColor: COLORS.border }}>执行机构 Actuators</div>
-                        <div className="grid grid-cols-2 gap-3">
-                            <div className="relative z-50 p-3 rounded flex flex-col justify-between cursor-pointer hover:brightness-125 transition-all border-l-2 pointer-events-auto group"
-                                style={{ backgroundColor: COLORS.background, borderColor: COLORS.textMuted }}
-                                onClick={() => setActiveChart('bypassValveOpening')}>
-                                <span className="text-xs" style={{ color: COLORS.textDim }}>旁通阀开度</span>
-                                <div className="flex items-baseline gap-1 mt-1">
-                                    <span className="text-2xl font-black font-mono group-hover:underline decoration-2 underline-offset-4" style={{ color: COLORS.coolingWater }}>{data.bypassValveOpening.toFixed(2)}</span>
-                                    <span className="text-xs text-gray-500">%</span>
-                                </div>
-                            </div>
-                            <div className="relative z-50 p-3 rounded flex flex-col justify-between cursor-pointer hover:brightness-125 transition-all border-l-2 pointer-events-auto group"
-                                style={{ backgroundColor: COLORS.background, borderColor: COLORS.textMuted }}
-                                onClick={() => setActiveChart('highPressureValveOpening')}>
-                                <span className="text-xs" style={{ color: COLORS.textDim }}>二通阀开度</span>
-                                <div className="flex items-baseline gap-1 mt-1">
-                                    <span className="text-2xl font-black font-mono group-hover:underline decoration-2 underline-offset-4" style={{ color: COLORS.coolingWaterHot }}>{data.highPressureValveOpening.toFixed(2)}</span>
-                                    <span className="text-xs text-gray-500">%</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* 制冷量参数 Cooling Capacity */}
-                    <div className="space-y-3 lg:col-span-2">
-                        <div className="text-xs uppercase tracking-wider font-semibold border-b pb-1" style={{ color: '#22d3ee', borderColor: COLORS.border }}>制冷量参数 Cooling Capacity</div>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                            <div className="relative z-50 p-3 rounded flex flex-col justify-between cursor-pointer hover:brightness-125 transition-all border-l-2 pointer-events-auto group"
-                                style={{ backgroundColor: COLORS.background, borderColor: '#22d3ee' }}
-                                onClick={() => setActiveChart('totalCooling')}>
-                                <span className="text-xs" style={{ color: COLORS.textDim }}>总制冷量</span>
-                                <div className="flex items-baseline gap-1 mt-1">
-                                    <span className="text-2xl font-black font-mono group-hover:underline decoration-2 underline-offset-4" style={{ color: '#22d3ee' }}>{data.totalCooling.toFixed(1)}</span>
-                                    <span className="text-xs text-gray-500">kW</span>
-                                </div>
-                            </div>
-                            <div className="relative z-50 p-3 rounded flex flex-col justify-between cursor-pointer hover:brightness-125 transition-all border-l-2 pointer-events-auto group"
-                                style={{ backgroundColor: COLORS.background, borderColor: COLORS.coolingWater }}
-                                onClick={() => setActiveChart('naturalCooling')}>
-                                <span className="text-xs" style={{ color: COLORS.textDim }}>自然冷却量</span>
-                                <div className="flex items-baseline gap-1 mt-1">
-                                    <span className="text-2xl font-black font-mono group-hover:underline decoration-2 underline-offset-4" style={{ color: COLORS.coolingWater }}>{data.naturalCooling.toFixed(1)}</span>
-                                    <span className="text-xs text-gray-500">kW</span>
-                                </div>
-                            </div>
-                            <div className="relative z-50 p-3 rounded flex flex-col justify-between cursor-pointer hover:brightness-125 transition-all border-l-2 pointer-events-auto group"
-                                style={{ backgroundColor: COLORS.background, borderColor: COLORS.lowPressure }}
-                                onClick={() => setActiveChart('dxCooling')}>
-                                <span className="text-xs" style={{ color: COLORS.textDim }}>DX制冷量</span>
-                                <div className="flex items-baseline gap-1 mt-1">
-                                    <span className="text-2xl font-black font-mono group-hover:underline decoration-2 underline-offset-4" style={{ color: COLORS.lowPressure }}>{data.dxCooling.toFixed(1)}</span>
-                                    <span className="text-xs text-gray-500">kW</span>
-                                </div>
-                            </div>
-                            <div className="relative z-50 p-3 rounded flex flex-col justify-between cursor-pointer hover:brightness-125 transition-all border-l-2 pointer-events-auto group"
-                                style={{ backgroundColor: COLORS.background, borderColor: '#f43f5e' }}
-                                onClick={() => setActiveChart('cfcDemand')}>
-                                <span className="text-xs" style={{ color: COLORS.textDim }}>CFC需求</span>
-                                <div className="flex items-baseline gap-1 mt-1">
-                                    <span className="text-2xl font-black font-mono group-hover:underline decoration-2 underline-offset-4" style={{ color: '#f43f5e' }}>{data.cfcDemand.toFixed(0)}</span>
-                                    <span className="text-xs text-gray-500">%</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* 设备运行参数 Equipment Status */}
-                    <div className="space-y-3 lg:col-span-2">
-                        <div className="text-xs uppercase tracking-wider font-semibold border-b pb-1" style={{ color: '#a78bfa', borderColor: COLORS.border }}>设备运行参数 Equipment Status</div>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                            <div className="relative z-50 p-3 rounded flex flex-col justify-between cursor-pointer hover:brightness-125 transition-all border-l-2 pointer-events-auto group"
-                                style={{ backgroundColor: COLORS.background, borderColor: '#a78bfa' }}
-                                onClick={() => setActiveChart('fanSpeed')}>
-                                <span className="text-xs" style={{ color: COLORS.textDim }}>风机转速</span>
-                                <div className="flex items-baseline gap-1 mt-1">
-                                    <span className="text-2xl font-black font-mono group-hover:underline decoration-2 underline-offset-4" style={{ color: '#a78bfa' }}>{data.fanSpeed.toFixed(0)}</span>
-                                    <span className="text-xs text-gray-500">RPM</span>
-                                </div>
-                            </div>
-                            <div className="relative z-50 p-3 rounded flex flex-col justify-between cursor-pointer hover:brightness-125 transition-all border-l-2 pointer-events-auto group"
-                                style={{ backgroundColor: COLORS.background, borderColor: COLORS.highPressure }}
-                                onClick={() => setActiveChart('compHz')}>
-                                <span className="text-xs" style={{ color: COLORS.textDim }}>压缩机频率</span>
-                                <div className="flex items-baseline gap-1 mt-1">
-                                    <span className="text-2xl font-black font-mono group-hover:underline decoration-2 underline-offset-4" style={{ color: COLORS.highPressure }}>{data.compHz.toFixed(1)}</span>
-                                    <span className="text-xs text-gray-500">Hz</span>
-                                </div>
-                            </div>
-                            <div className="relative z-50 p-3 rounded flex flex-col justify-between border-l-2"
-                                style={{ backgroundColor: COLORS.background, borderColor: COLORS.coolingWater }}>
-                                <span className="text-xs" style={{ color: COLORS.textDim }}>压缩机台数</span>
-                                <div className="flex items-baseline gap-1 mt-1">
-                                    <span className="text-2xl font-black font-mono" style={{ color: COLORS.coolingWater }}>{data.activeCompressors}</span>
-                                    <span className="text-xs text-gray-500">/4</span>
-                                </div>
-                            </div>
-                            <div className="relative z-50 p-3 rounded flex flex-col justify-between border-l-2"
-                                style={{ backgroundColor: COLORS.background, borderColor: COLORS.airflow }}>
-                                <span className="text-xs" style={{ color: COLORS.textDim }}>有效模式</span>
-                                <div className="text-sm font-bold mt-2" style={{ color: COLORS.airflow }}>
-                                    {data.effectiveMode === 'natural' ? '自然冷却' : data.effectiveMode === 'hybrid' ? '混合模式' : '机械制冷'}
-                                </div>
-                            </div>
-                        </div>
-                        <div className="flex flex-wrap gap-2 pt-1">
-                            <span className="text-xs px-2 py-1 rounded border" style={{
-                                color: data.lowLoadMode ? '#facc15' : COLORS.textDim,
-                                borderColor: data.lowLoadMode ? '#facc15' : COLORS.border,
+                <div className="flex flex-wrap gap-2">
+                    {[
+                        { label: '低负载', active: data.lowLoadMode, color: '#facc15' },
+                        { label: '除湿', active: data.dehumidifying, color: '#38bdf8' },
+                        { label: '应急制冷', active: data.emergencyCooling, color: '#ef4444' }
+                    ].map((badge) => (
+                        <span
+                            key={`kpi-${badge.label}`}
+                            className="px-2 py-1 rounded border text-xs"
+                            style={{
+                                color: badge.active ? badge.color : COLORS.textDim,
+                                borderColor: badge.active ? badge.color : COLORS.border,
                                 backgroundColor: COLORS.background
-                            }}>
-                                低负载: {data.lowLoadMode ? 'ON' : 'OFF'}
-                            </span>
-                            <span className="text-xs px-2 py-1 rounded border" style={{
-                                color: data.dehumidifying ? '#38bdf8' : COLORS.textDim,
-                                borderColor: data.dehumidifying ? '#38bdf8' : COLORS.border,
-                                backgroundColor: COLORS.background
-                            }}>
-                                除湿: {data.dehumidifying ? 'ON' : 'OFF'}
-                            </span>
-                            <span className="text-xs px-2 py-1 rounded border" style={{
-                                color: data.emergencyCooling ? '#ef4444' : COLORS.textDim,
-                                borderColor: data.emergencyCooling ? '#ef4444' : COLORS.border,
-                                backgroundColor: COLORS.background
-                            }}>
-                                应急制冷: {data.emergencyCooling ? 'ON' : 'OFF'}
-                            </span>
-                        </div>
-                    </div>
+                            }}
+                        >
+                            {badge.label}: {badge.active ? 'ON' : 'OFF'}
+                        </span>
+                    ))}
+                </div>
 
-                    {/* 压缩机参数 Compressor Parameters */}
-                    <div className="space-y-3 lg:col-span-4">
-                        <div className="text-xs uppercase tracking-wider font-semibold border-b pb-1" style={{ color: '#f59e0b', borderColor: COLORS.border }}>压缩机参数 Compressor Parameters</div>
-                        <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
-                            <div className="relative z-50 p-3 rounded flex flex-col justify-between cursor-pointer hover:brightness-125 transition-all border-l-2 pointer-events-auto group"
-                                style={{ backgroundColor: COLORS.background, borderColor: '#facc15' }}
-                                onClick={() => setActiveChart('eevOpening')}>
-                                <span className="text-xs" style={{ color: COLORS.textDim }}>EEV开度</span>
-                                <div className="flex items-baseline gap-1 mt-1">
-                                    <span className="text-2xl font-black font-mono group-hover:underline decoration-2 underline-offset-4" style={{ color: '#facc15' }}>{data.eev1Opening.toFixed(1)}</span>
-                                    <span className="text-xs text-gray-500">%</span>
-                                </div>
-                            </div>
-                            <div className="relative z-50 p-3 rounded flex flex-col justify-between cursor-pointer hover:brightness-125 transition-all border-l-2 pointer-events-auto group"
-                                style={{ backgroundColor: COLORS.background, borderColor: COLORS.highPressure }}
-                                onClick={() => setActiveChart('highPressure')}>
-                                <span className="text-xs" style={{ color: COLORS.textDim }}>高压压力</span>
-                                <div className="flex items-baseline gap-1 mt-1">
-                                    <span className="text-2xl font-black font-mono group-hover:underline decoration-2 underline-offset-4" style={{ color: COLORS.highPressure }}>{data.highPressure.toFixed(1)}</span>
-                                    <span className="text-xs text-gray-500">Bar</span>
-                                </div>
-                            </div>
-                            <div className="relative z-50 p-3 rounded flex flex-col justify-between cursor-pointer hover:brightness-125 transition-all border-l-2 pointer-events-auto group"
-                                style={{ backgroundColor: COLORS.background, borderColor: COLORS.lowPressure }}
-                                onClick={() => setActiveChart('lowPressure')}>
-                                <span className="text-xs" style={{ color: COLORS.textDim }}>低压压力</span>
-                                <div className="flex items-baseline gap-1 mt-1">
-                                    <span className="text-2xl font-black font-mono group-hover:underline decoration-2 underline-offset-4" style={{ color: COLORS.lowPressure }}>{data.lowPressure.toFixed(1)}</span>
-                                    <span className="text-xs text-gray-500">Bar</span>
-                                </div>
-                            </div>
-                            <div className="relative z-50 p-3 rounded flex flex-col justify-between cursor-pointer hover:brightness-125 transition-all border-l-2 pointer-events-auto group"
-                                style={{ backgroundColor: COLORS.background, borderColor: '#38bdf8' }}
-                                onClick={() => setActiveChart('evapTemp')}>
-                                <span className="text-xs" style={{ color: COLORS.textDim }}>蒸发温度</span>
-                                <div className="flex items-baseline gap-1 mt-1">
-                                    <span className="text-2xl font-black font-mono group-hover:underline decoration-2 underline-offset-4" style={{ color: '#38bdf8' }}>{data.evapTemp.toFixed(1)}</span>
-                                    <span className="text-xs text-gray-500">°C</span>
-                                </div>
-                            </div>
-                            <div className="relative z-50 p-3 rounded flex flex-col justify-between cursor-pointer hover:brightness-125 transition-all border-l-2 pointer-events-auto group"
-                                style={{ backgroundColor: COLORS.background, borderColor: '#fb923c' }}
-                                onClick={() => setActiveChart('condTemp')}>
-                                <span className="text-xs" style={{ color: COLORS.textDim }}>冷凝温度</span>
-                                <div className="flex items-baseline gap-1 mt-1">
-                                    <span className="text-2xl font-black font-mono group-hover:underline decoration-2 underline-offset-4" style={{ color: '#fb923c' }}>{data.condTemp.toFixed(1)}</span>
-                                    <span className="text-xs text-gray-500">°C</span>
-                                </div>
-                            </div>
-                            <div className="relative z-50 p-3 rounded flex flex-col justify-between cursor-pointer hover:brightness-125 transition-all border-l-2 pointer-events-auto group"
-                                style={{ backgroundColor: COLORS.background, borderColor: '#f87171' }}
-                                onClick={() => setActiveChart('superheat')}>
-                                <span className="text-xs" style={{ color: COLORS.textDim }}>过热度</span>
-                                <div className="flex items-baseline gap-1 mt-1">
-                                    <span className="text-2xl font-black font-mono group-hover:underline decoration-2 underline-offset-4" style={{ color: '#f87171' }}>{data.superheat.toFixed(1)}</span>
-                                    <span className="text-xs text-gray-500">K</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+                {renderCollapsibleSections()}
+
+                <div ref={trendChartRef}>
+                    <div className="text-xs mb-2" style={{ color: COLORS.textMuted }}>关键趋势图（近 60 点采样，点击上方数字可快速定位曲线）</div>
+                    {renderUnifiedTrendChart()}
                 </div>
             </div>
-
-            {/* 图表弹窗 */}
-            {renderChartModal()}
         </div >
     );
 }
