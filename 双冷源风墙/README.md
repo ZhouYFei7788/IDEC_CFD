@@ -1,73 +1,52 @@
-# React + TypeScript + Vite
+# 双冷源风墙空调机组 (Dual Cold Source Air-Wall HVAC)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+## 项目概况
 
-Currently, two official plugins are available:
+本项目是一个基于 **React + TypeScript + Vite** 构建的前端可视化应用，主要用于展示**双冷源风墙空调机组**的 SCADA 风格（Digital Twin）实时监控界面。系统集成了复杂的工艺流程动画、实时数据展示、以及交互式图表分析功能，旨在提供一个直观、现代化且具备工业级质感的数字孪生监控大屏。
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+### 核心功能与特性
 
-## React Compiler
+1. **工业级工艺流程图可视化 (SCADA/Digital Twin Style)**
+   - 包含制冷剂回路（高低压常温、回气等）、冷却水回路（进出水温度区分）、气流动态粒子特效。
+   - 实现压缩机、风机、电子膨胀阀 (EEV) 等设备的状态可视化与动画展现。
+   - 直观的动态管路渲染展示不同流体的运行方向和运作状态。
+2. **多模式智能切换与仿真**
+   - 支持**自然冷却 (Natural Cooling)**、**机械制冷 (Mechanical Cooling)** 以及**混合模式 (Hybrid)** 的可视化，根据不同的内外条件（热负荷、设定温度等）计算输出有效模式。
+3. **实时数据监测与分析图表**
+   - 集成 `recharts` 实现核心指标的趋势监测图表，可动态切换预设主题（空气侧、水侧、能量/容量、制冷剂循环），支持自定义指标选择。
+   - 各项关键指标卡片（如送风温度、回风温度、CFC需求、总制冷量等）支持点击直接查看其历史趋势图。
+4. **历史数据记录与导出**
+   - 实时记录周期性的关键参数，支持将当前参数快照与历史序列数据一键导出为 **JSON** 或 **Excel (CSV)** 格式。
+5. **现代化交互与动画**
+   - 使用 `framer-motion` 实现平滑的组件展开/折叠、数值变化动效和循环播放的气流、风机及管路流动动画，极大提升用户体验。
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## 技术栈
 
-## Expanding the ESLint configuration
+- **框架**: React 19, Vite, TypeScript
+- **样式**: Tailwind CSS, PostCSS
+- **动画与可视化**: Framer Motion, GSAP, Recharts
+- **其他工具**: ESLint, clsx, tailwind-merge
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## 快速开始
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+### 依赖安装
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+### 本地开发运行
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm run dev
 ```
+
+### 生产环境构建
+
+```bash
+npm run build
+```
+
+## 类似仓库与部署情况
+
+该项目代码已关联并提交至 GitHub 仓库。目前系统中已通过 GitHub CLI 验证是否有其他相同名称的项目，并在确保分支整洁的情况下推送最新的更新。部署脚本（如构建网页版的脚本）已配置，可一键部署静态页面至指定托管平台。
